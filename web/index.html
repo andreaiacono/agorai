@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agorai</title>
+<link rel="stylesheet" href="style.css">
+<!-- xterm.js from CDN. For a fully offline single-binary build, vendor these
+     into web/ and update the paths (see README "Offline / vendoring"). -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="logo">Agor<span>AI</span></div>
+    <div class="newbar">
+      <button class="new-btn" onclick="openModal('open')"><b>+</b> New Session</button>
+      <button class="new-btn" onclick="openModal('worktree')"><b>+</b> New Session in new branch</button>
+      <button class="new-btn" onclick="openModal('resume')">↻ Resume Session</button>
+      <button class="new-btn" onclick="openModal('review')">⊚ Review PR</button>
+    </div>
+    <div class="meta" id="meta">—</div>
+    <button class="icon-btn" id="settings-btn" onclick="openSettings()" title="Settings">⚙</button>
+  </div>
+
+  <div class="split">
+    <aside class="sidebar">
+      <div class="side-head">
+        <span class="ttl">Sessions</span>
+      </div>
+      <div id="session-list"></div>
+    </aside>
+
+    <div class="gutter" id="gutter"></div>
+
+    <section class="main">
+      <div class="term-head">
+        <span class="t-name" id="t-name">AgorAI</span>
+        <span class="t-cwd" id="t-cwd"></span>
+        <span class="t-right" id="t-right"></span>
+      </div>
+      <div id="term-host">
+        <div class="empty" id="empty">No session selected. Use the buttons in the top bar to start one.</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="statusbar">
+    <span><span class="hot">click</span> a session to focus</span>
+    <span><span class="hot">type</span> goes to the focused session</span>
+    <span><span class="hot">click</span> Yes/No/Always to answer a prompt</span>
+    <span><span class="hot">dbl-click</span> a name to rename</span>
+    <span class="sp" id="status-count"></span>
+  </div>
+
+  <!-- New session modal -->
+  <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+    <div class="modal" id="modal">
+      <h2 id="modal-title">New <span>session</span></h2>
+      <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
+      <div class="model-row"><span>Model</span><select id="model-sel"></select></div>
+      <div class="wt-note">A fresh git worktree + branch is created so this session can edit in parallel without touching your other checkouts.</div>
+      <div class="resume-note">Re-opens a past session with its full history in a hosted terminal. Don't run the same session in two places at once.</div>
+      <label class="resume-opts"><input type="checkbox" id="fork-chk"> Fork a copy — use if the session is still running (e.g. a <code>claude agents</code> bg session)</label>
+      <div class="review-form">
+        <label class="field"><span class="field-label">Linear ticket</span>
+          <input id="review-ticket" placeholder="e.g. BLUE-900" autocomplete="off"></label>
+        <div class="field-hint">The repository is taken from the PR in the ticket — no directory needed.</div>
+        <button class="review-go" onclick="launchReview()">Start review</button>
+      </div>
+      <div class="repo-list" id="repo-list"></div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="overlay" id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+    <div class="modal">
+      <h2><span>Settings</span></h2>
+      <div class="settings-body">
+        <label class="field">
+          <span class="field-label">Scrollback lines <small>per terminal (applies to newly opened terminals)</small></span>
+          <input type="number" id="set-scrollback" min="100" max="200000" step="1000">
+        </label>
+        <div class="field">
+          <span class="field-label">Environment variables <small>passed to claude at launch (applies to new sessions)</small></span>
+          <div id="env-rows"></div>
+          <button class="add-env" type="button" onclick="addEnvRow()">+ Add variable</button>
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button type="button" onclick="closeSettings()">Cancel</button>
+        <button type="button" class="primary" onclick="saveSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
