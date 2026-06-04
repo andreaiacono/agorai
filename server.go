@@ -32,6 +32,7 @@ type Server struct {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/repos", s.handleRepos)
+	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/models", s.handleModels)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
@@ -81,6 +82,20 @@ func (s *Server) handleResumable(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, scanResumable(50))
 }
 
+// handleRoots lists the configured roots — used as parent-folder options when
+// creating a session in a brand-new directory.
+func (s *Server) handleRoots(w http.ResponseWriter, _ *http.Request) {
+	type root struct {
+		Path    string `json:"path"`
+		Display string `json:"display"`
+	}
+	out := make([]root, 0, len(s.roots))
+	for _, r := range s.roots {
+		out = append(out, root{Path: r, Display: shortenHome(r)})
+	}
+	writeJSON(w, out)
+}
+
 // handleDebugPrompts dumps, for every session currently asking permission, what
 // the prompt parser sees — the parsed options plus the ANSI-stripped recent
 // output — so a mis-parse can be diagnosed without running the server here.
@@ -119,11 +134,27 @@ type createReq struct {
 	Fork      bool   `json:"fork"`      // resume: branch a copy (for still-running sessions)
 	Model     string `json:"model"`     // "" | "opus" | "sonnet" | "haiku"
 	Ticket    string `json:"ticket"`    // for "review": the Linear ticket number
+	Parent    string `json:"parent"`    // for "newdir": the parent root dir
+	Dir       string `json:"dir"`       // for "newdir": the new folder name
+	GitInit   bool   `json:"gitInit"`   // for "newdir": run `git init`
 }
 
 // reviewPromptTemplate is the initial prompt for a review session; $TICKET is
 // replaced with the user-supplied ticket and passed to claude as its first message.
 const reviewPromptTemplate = "Please spawn the reviewers for the PR contained in the linear ticket $TICKET, using the ticket description as a base for analysing the PR content. The repository to review is the one the PR belongs to — determine it from the ticket/PR, don't assume any local directory. Please don't checkout the branch, just work with `gh`."
+
+// reviewWorkspace is a dedicated dir for review sessions (gh-only, repo-agnostic).
+func reviewWorkspace() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "/tmp"
+	}
+	dir := filepath.Join(home, ".agorai", "review")
+	if os.MkdirAll(dir, 0o755) != nil {
+		return home
+	}
+	return dir
+}
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req createReq
@@ -180,11 +211,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// No repo to choose — the review works via `gh` and finds the PR's repo
-		// from the ticket. Spawn in a neutral directory (home).
-		cwd, err := os.UserHomeDir()
-		if err != nil || cwd == "" {
-			cwd = "/tmp"
-		}
+		// from the ticket. Spawn in a dedicated workspace (not the whole home dir)
+		// so its folder-trust stays contained and is accepted just once.
+		cwd := reviewWorkspace()
 		prompt := strings.ReplaceAll(reviewPromptTemplate, "$TICKET", ticket)
 
 		sid := newUUID()
@@ -198,6 +227,48 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		sess.setModel(model)
 		sess.setRecap("Reviewing " + ticket + "…")
+		s.mgr.adopt(sess, sid)
+		writeJSON(w, map[string]string{"id": sess.ID})
+		return
+	}
+
+	// New directory: create a fresh folder under a root, optionally `git init`,
+	// and run the session there.
+	if req.Mode == "newdir" {
+		dir := strings.TrimSpace(req.Dir)
+		if dir == "" || strings.ContainsAny(dir, `/\`) || dir == "." || dir == ".." {
+			http.Error(w, "invalid directory name", http.StatusBadRequest)
+			return
+		}
+		if !underRoots(req.Parent, s.roots) {
+			http.Error(w, "parent not under an allowed root", http.StatusForbidden)
+			return
+		}
+		cwd := filepath.Join(filepath.Clean(req.Parent), dir)
+		if !underRoots(cwd, s.roots) {
+			http.Error(w, "invalid path", http.StatusForbidden)
+			return
+		}
+		if _, err := os.Stat(cwd); err == nil {
+			http.Error(w, "that directory already exists", http.StatusConflict)
+			return
+		}
+		if err := os.MkdirAll(cwd, 0o755); err != nil {
+			http.Error(w, "mkdir: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.GitInit {
+			_ = exec.Command("git", "-C", cwd, "init", "-b", "main").Run()
+		}
+		branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+		sid := newUUID()
+		args := append([]string{"--session-id", sid}, modelArgs(model)...)
+		sess, err := s.mgr.Spawn(cwd, dir, branch, args...)
+		if err != nil {
+			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sess.setModel(model)
 		s.mgr.adopt(sess, sid)
 		writeJSON(w, map[string]string{"id": sess.ID})
 		return

@@ -1,6 +1,7 @@
 /* agorai frontend — talks to the Go server over REST + two WebSockets. */
 
 const FitAddon = window.FitAddon.FitAddon;
+const SearchAddon = window.SearchAddon && window.SearchAddon.SearchAddon; // optional (CDN)
 const enc = new TextEncoder();
 
 const state = {
@@ -30,6 +31,12 @@ function connectControl() {
           s.state === "waiting" || s.state === "perm" || (prev === "working" && s.state === "idle");
         if (s.state !== prev && attention && s.id !== state.selected) {
           state.unread.add(s.id);
+          // Audible alert for a session you're not watching (skip the first
+          // snapshot, where prev is undefined, to avoid a burst on load).
+          if (prev !== undefined) {
+            if (s.state === "perm") playSound("perm");
+            else if (s.state === "idle" && prev === "working") playSound("done");
+          }
         }
         if (s.state === "working") state.unread.delete(s.id); // active again, nothing pending
         state.prevStates[s.id] = s.state;
@@ -94,7 +101,7 @@ function sessionCard(s) {
 
     if (opts && opts.length) {
       // We parsed real numbered options → render them as buttons.
-      const q = s.prompt.question ? `<div class="q">${esc(s.prompt.question)}</div>` : "";
+      const q = s.prompt.question ? `<div class="q" title="${esc(s.prompt.question)}">${esc(s.prompt.question)}</div>` : "";
       p.innerHTML = q + `<div class="opts">` + opts.map((o) =>
         `<button class="opt" data-num="${o.num}"><span class="k">${o.num}</span>${esc(o.label)}</button>`
       ).join("") + `</div>`;
@@ -148,10 +155,26 @@ function mountTerminal(id) {
     scrollback: state.config.scrollback || 10000,  // configurable — see Settings
     fontSize: 13,
     fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
-    theme: { background: "#0a0d12", foreground: "#cdd6e0" },
+    theme: {
+      background: "#0a0d12",
+      foreground: "#cdd6e0",
+      // bright current-match highlight (find selects the active match)
+      selectionBackground: "#e3b341",
+      selectionForeground: "#0a0d12",
+    },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+
+  let search = null;
+  if (SearchAddon) {
+    search = new SearchAddon();
+    term.loadAddon(search);
+    // don't let Ctrl+F reach the PTY — it opens our find bar instead
+    term.attachCustomKeyEventHandler((e) =>
+      !(e.type === "keydown" && (e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")));
+  }
+
   term.open(pane);
   fit.fit();
 
@@ -169,7 +192,86 @@ function mountTerminal(id) {
     if (d && ws.readyState === 1) ws.send(enc.encode(d));
   });
 
-  state.terms.set(id, { term, fit, ws, pane });
+  state.terms.set(id, { term, fit, ws, pane, search });
+}
+
+/* ---------- find in terminal ---------- */
+
+// All-match highlight (when the renderer supports decorations); the active match
+// is also shown via the bright selection colour set on the terminal theme.
+const FIND_DECORATIONS = {
+  matchBackground: "#2f6db0",          // all matches: vivid blue
+  activeMatchBackground: "#e3b341",    // current match: amber
+  matchOverviewRuler: "#4aa3ff",
+  activeMatchColorOverviewRuler: "#e3b341",
+};
+
+function activeSearch() {
+  const t = state.terms.get(state.selected);
+  return t ? t.search : null;
+}
+
+function openFind() {
+  if (!state.selected) return;
+  document.getElementById("findbar").classList.add("open");
+  const inp = document.getElementById("find-input");
+  inp.focus();
+  inp.select();
+  if (inp.value) doFind("incremental");
+}
+
+function closeFind() {
+  document.getElementById("findbar").classList.remove("open");
+  const s = activeSearch();
+  try { if (s) s.clearDecorations(); } catch {}
+  const t = state.terms.get(state.selected);
+  if (t) t.term.focus();
+}
+
+function doFind(dir) {
+  const s = activeSearch();
+  const count = document.getElementById("find-count");
+  const q = document.getElementById("find-input").value;
+  if (!s) { count.textContent = "n/a"; return; }
+  if (!q) { try { s.clearDecorations(); } catch {} count.textContent = ""; return; }
+
+  const go = (opts) => (dir === "prev"
+    ? s.findPrevious(q, opts)
+    : s.findNext(q, { ...opts, incremental: dir === "incremental" }));
+
+  try {
+    go({ caseSensitive: false, decorations: FIND_DECORATIONS });
+  } catch {
+    try { go({ caseSensitive: false }); } catch (e) { console.error("find failed", e); }
+  }
+  // The addon's result count is unreliable, so count matches ourselves (after the
+  // selection has settled). Debounced for incremental typing on big buffers.
+  clearTimeout(doFind._t);
+  doFind._t = setTimeout(updateFindCount, dir === "incremental" ? 120 : 0);
+}
+
+// Count total matches in the buffer and which one is currently selected.
+function updateFindCount() {
+  const t = state.terms.get(state.selected);
+  const el = document.getElementById("find-count");
+  const q = document.getElementById("find-input").value;
+  if (!t || !q) { el.textContent = ""; return; }
+  const buf = t.term.buffer.active;
+  const needle = q.toLowerCase();
+  const sel = t.term.getSelectionPosition(); // buffer coords, or undefined
+  let total = 0, cur = 0;
+  for (let y = 0; y < buf.length; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const text = line.translateToString(true).toLowerCase();
+    let x = text.indexOf(needle);
+    while (x !== -1) {
+      total++;
+      if (sel && (y < sel.start.y || (y === sel.start.y && x <= sel.start.x))) cur++;
+      x = text.indexOf(needle, x + needle.length);
+    }
+  }
+  el.textContent = total ? `${Math.max(cur, 1)}/${total}` : "0/0";
 }
 
 function sendResize(ws, term) {
@@ -256,6 +358,7 @@ function disposeStaleTerminals() {
 
 let repos = [];          // from /api/repos        (open + worktree modes)
 let resumables = [];     // from /api/resumable    (resume mode)
+let roots = [];          // from /api/roots        (newdir parent options)
 let mode = "open";
 const overlay = document.getElementById("overlay");
 
@@ -265,6 +368,9 @@ async function openModal(initialMode = "open") {
   resumables = []; // refetched when the Resume tab is opened
   await populateModels();
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []);
+  roots = await fetch("/api/roots").then((r) => r.json()).catch(() => []);
+  document.getElementById("newdir-parent").innerHTML =
+    roots.map((r) => `<option value="${esc(r.path)}">${esc(r.display)}</option>`).join("");
   await setMode(initialMode); // selects the tab + renders the matching list
   document.getElementById("search").focus();
 }
@@ -284,6 +390,10 @@ async function setMode(m) {
   modal.classList.toggle("wt-mode", m === "worktree");
   modal.classList.toggle("resume-mode", m === "resume");
   modal.classList.toggle("review-mode", m === "review");
+  // reset the new-directory sub-state whenever the mode changes
+  modal.classList.remove("newdir-mode");
+  document.getElementById("newdir-chk").checked = false;
+  document.getElementById("newdir-name").value = "";
   document.getElementById("search").placeholder = m === "resume" ? "Filter past sessions…" : "Filter repos…";
 
   if (m === "review") {
@@ -299,6 +409,21 @@ function launchReview() {
   const ticket = document.getElementById("review-ticket").value.trim();
   if (!ticket) { alert("Enter a Linear ticket number."); return; }
   createSession({ mode: "review", ticket, model: selectedModel() });
+}
+
+function toggleNewDir() {
+  const on = document.getElementById("newdir-chk").checked;
+  document.getElementById("modal").classList.toggle("newdir-mode", on);
+  if (on) document.getElementById("newdir-name").focus();
+}
+
+function launchNewDir() {
+  const parent = document.getElementById("newdir-parent").value;
+  const dir = document.getElementById("newdir-name").value.trim();
+  const gitInit = document.getElementById("newdir-git").checked;
+  if (!parent) { alert("Choose a parent folder."); return; }
+  if (!dir) { alert("Enter a folder name."); return; }
+  createSession({ mode: "newdir", parent, dir, gitInit, model: selectedModel() });
 }
 
 function renderList() {
@@ -434,11 +559,73 @@ async function saveSettings() {
   closeSettings();
 }
 
+/* ---------- sound alerts ---------- */
+
+let soundOn = localStorage.getItem("agorai.sound") !== "off";
+let audioCtx;
+
+// Browsers require a user gesture before audio can play; unlock on first input.
+function unlockAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch {}
+}
+window.addEventListener("click", unlockAudio, { once: true });
+window.addEventListener("keydown", unlockAudio, { once: true });
+
+// Play a short sequence of tones via the Web Audio API (no audio files).
+function beep(freqs, dur, gainVal) {
+  if (!audioCtx) return;
+  let t = audioCtx.currentTime;
+  for (const f of freqs) {
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = f;
+    g.gain.setValueAtTime(gainVal, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + dur);
+    t += dur;
+  }
+}
+
+function playSound(type) {
+  if (!soundOn || !audioCtx) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  if (type === "perm") beep([880, 1175], 0.12, 0.06);  // urgent two-note rise
+  else beep([784], 0.2, 0.05);                          // soft single "done" tone
+}
+
+function toggleSound() {
+  soundOn = !soundOn;
+  localStorage.setItem("agorai.sound", soundOn ? "on" : "off");
+  document.getElementById("sound-btn").textContent = soundOn ? "🔊" : "🔇";
+  if (soundOn) { unlockAudio(); playSound("done"); } // confirm with a sample
+}
+
 /* ---------- util ---------- */
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+// Ctrl/Cmd+F opens the terminal find bar (capture phase, before xterm/browser).
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+    e.preventDefault();
+    openFind();
+  }
+}, true);
+
+document.getElementById("find-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); doFind(e.shiftKey ? "prev" : "next"); }
+  else if (e.key === "Escape") { e.preventDefault(); closeFind(); }
+});
+
+document.getElementById("sound-btn").textContent = soundOn ? "🔊" : "🔇";
 loadConfig();
 connectControl();

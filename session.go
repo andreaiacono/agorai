@@ -271,7 +271,7 @@ func (m *Manager) Spawn(cwd, name, branch string, extraArgs ...string) (*Session
 		recap:   "Starting…",
 		ptmx:    ptmx,
 		cmd:     cmd,
-		ring:    newRingBuffer(256 * 1024),
+		ring:    newRingBuffer(m.ringBytes()),
 		clients: map[chan []byte]bool{},
 	}
 
@@ -439,6 +439,27 @@ func (m *Manager) Rename(id, name string) {
 		m.store.upsert(p)
 	}
 	m.changed()
+}
+
+// ringBytes sizes the per-session replay buffer from the configured scrollback.
+// Output is byte-heavy (ANSI + redraws), so we keep ~512 bytes per line, bounded
+// to keep memory sane. This is what gets replayed into a (re)connecting terminal.
+func (m *Manager) ringBytes() int {
+	sb := 10000
+	if m.cfg != nil {
+		if v := m.cfg.Get().Scrollback; v > 0 {
+			sb = v
+		}
+	}
+	n := sb * 512
+	const min, max = 512 << 10, 24 << 20 // 512KB … 24MB
+	if n < min {
+		n = min
+	}
+	if n > max {
+		n = max
+	}
+	return n
 }
 
 // ringBuffer keeps at most max bytes of recent PTY output for replay on connect.

@@ -129,6 +129,10 @@ hooks configured as above.
 - **Security** — binds to `127.0.0.1` only and validates that a session's `cwd`
   is under an allowed root. Don't expose the port without adding auth.
 - **Offline / vendoring** — `index.html` loads xterm.js from a CDN. For a truly
-  offline single-binary build, download `xterm.min.js`, `xterm.min.css`, and
-  `addon-fit.min.js` into `web/` and point the tags at them; they'll be embedded.
+  offline single-binary build, download `xterm.min.js`, `xterm.min.css`,
+  `addon-fit.min.js`, and `addon-search.min.js` into `web/` and point the tags at
+  them; they'll be embedded.
+- **Find in terminal** — `Ctrl/Cmd+F` opens a find bar for the focused session
+  (Enter / Shift+Enter step through matches). Uses xterm's search addon; the
+  browser's native find can't see the terminal buffer.
 ```
