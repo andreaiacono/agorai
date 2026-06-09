@@ -133,7 +133,10 @@ body {
 
 /* inline permission prompt */
 .prompt { margin-top: 9px; padding: 9px; background: #1d141a; border: 1px solid rgba(240,80,110,.35); border-radius: 6px; }
-.prompt .q { color: var(--text); margin-bottom: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prompt .q { color: var(--text); margin-bottom: 7px; display: flex; align-items: center; gap: 5px; }
+.prompt .q-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prompt .q-info { flex: none; color: var(--accent); cursor: help; font-size: 12px; }
+.prompt .q-info:hover { color: var(--text); }
 .opts { display: flex; flex-direction: column; gap: 5px; }
 .opt {
   text-align: left; background: var(--panel); color: var(--text);

@@ -104,7 +104,8 @@ function sessionCard(s) {
       // We parsed real numbered options → render them as buttons.
       const ctxLines = (s.prompt.context || "").split("\n").filter((l) => l && l !== s.prompt.question);
       const full = [...ctxLines, s.prompt.question].filter(Boolean).join("\n");
-      const q = s.prompt.question ? `<div class="q" title="${esc(full)}">${esc(s.prompt.question)}</div>` : "";
+      const info = full ? `<span class="q-info" title="${esc(full)}">ⓘ</span>` : "";
+      const q = s.prompt.question ? `<div class="q" title="${esc(full)}"><span class="q-text">${esc(s.prompt.question)}</span>${info}</div>` : "";
       p.innerHTML = q + `<div class="opts">` + opts.map((o) =>
         `<button class="opt" data-num="${o.num}"><span class="k">${o.num}</span>${esc(o.label)}</button>`
       ).join("") + `</div>`;
