@@ -61,10 +61,12 @@ function renderSessions() {
     list.appendChild(sessionCard(s));
   }
   disposeStaleTerminals();
-  const needs = state.sessions.filter((s) => s.state === "waiting" || s.state === "perm").length;
+  // "needs attention" = a pending permission, or anything that wants you and
+  // hasn't been looked at yet (unread).
+  const needs = state.sessions.filter((s) => s.state === "perm" || state.unread.has(s.id)).length;
   document.getElementById("meta").textContent =
     `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}` +
-    (needs ? ` · ${needs} need input` : "");
+    (needs ? ` · ${needs} need attention` : "");
 }
 
 function sessionCard(s) {
@@ -74,10 +76,9 @@ function sessionCard(s) {
     + (state.unread.has(s.id) ? " unread" : "");
   el.onclick = () => selectSession(s.id);
 
-  const badge =
-    s.state === "perm" ? `<span class="badge perm">permission</span>`
-    : s.state === "waiting" ? `<span class="badge input">input</span>`
-    : "";
+  // Only permission gets a badge (it pairs with the answer buttons). The amber
+  // dot/name already signals "wants you" for waiting/finished sessions.
+  const badge = s.state === "perm" ? `<span class="badge perm">permission</span>` : "";
 
   // While working, show an animated "Working" with oscillating dots (1→2→3→2…).
   const recap = s.state === "working" ? `Working<span class="dots"></span>` : esc(s.recap);
@@ -101,7 +102,9 @@ function sessionCard(s) {
 
     if (opts && opts.length) {
       // We parsed real numbered options → render them as buttons.
-      const q = s.prompt.question ? `<div class="q" title="${esc(s.prompt.question)}">${esc(s.prompt.question)}</div>` : "";
+      const ctxLines = (s.prompt.context || "").split("\n").filter((l) => l && l !== s.prompt.question);
+      const full = [...ctxLines, s.prompt.question].filter(Boolean).join("\n");
+      const q = s.prompt.question ? `<div class="q" title="${esc(full)}">${esc(s.prompt.question)}</div>` : "";
       p.innerHTML = q + `<div class="opts">` + opts.map((o) =>
         `<button class="opt" data-num="${o.num}"><span class="k">${o.num}</span>${esc(o.label)}</button>`
       ).join("") + `</div>`;
@@ -133,7 +136,11 @@ function selectSession(id) {
   if (!state.terms.has(id)) {
     mountTerminal(id);
   } else {
-    state.terms.get(id).fit.fit();
+    // The window may have been resized while this session was hidden: refit
+    // the xterm AND tell the PTY, or claude keeps rendering at the old width.
+    const t = state.terms.get(id);
+    t.fit.fit();
+    sendResize(t.ws, t.term);
   }
 
   const s = state.sessions.find((x) => x.id === id);
@@ -143,6 +150,12 @@ function selectSession(id) {
     document.getElementById("t-right").textContent = "Model: " + s.model;
   }
   renderSessions();
+
+  // Move the cursor into the terminal so the user can type straight away.
+  // Defer so it runs after renderSessions() rebuilt the list (which can steal
+  // focus) and after a just-mounted xterm has finished opening.
+  const t = state.terms.get(id);
+  if (t) requestAnimationFrame(() => t.term.focus());
 }
 
 function mountTerminal(id) {
@@ -278,9 +291,16 @@ function sendResize(ws, term) {
   if (ws.readyState === 1) ws.send(JSON.stringify({ resize: [term.cols, term.rows] }));
 }
 
+// Debounced: resizing fires continuously, and each PTY resize makes claude's
+// TUI repaint — a storm of SIGWINCHes litters the scrollback with partial
+// frames. Reflow the display live, but tell the PTY only once it settles.
+let winResizeTimer = null;
 window.addEventListener("resize", () => {
   const t = state.terms.get(state.selected);
-  if (t) { t.fit.fit(); sendResize(t.ws, t.term); }
+  if (!t) return;
+  t.fit.fit();
+  clearTimeout(winResizeTimer);
+  winResizeTimer = setTimeout(() => sendResize(t.ws, t.term), 150);
 });
 
 /* ---------- draggable divider between the two panels ---------- */
@@ -381,6 +401,7 @@ const MODAL_TITLES = {
   worktree: "New session in <span>new branch</span>",
   resume: "Resume <span>session</span>",
   review: "Review <span>PR</span>",
+  ticket: "New session for <span>ticket</span>",
 };
 
 async function setMode(m) {
@@ -390,6 +411,7 @@ async function setMode(m) {
   modal.classList.toggle("wt-mode", m === "worktree");
   modal.classList.toggle("resume-mode", m === "resume");
   modal.classList.toggle("review-mode", m === "review");
+  modal.classList.toggle("ticket-mode", m === "ticket");
   // reset the new-directory sub-state whenever the mode changes
   modal.classList.remove("newdir-mode");
   document.getElementById("newdir-chk").checked = false;
@@ -398,6 +420,11 @@ async function setMode(m) {
 
   if (m === "review") {
     document.getElementById("review-ticket").value = "";
+    document.querySelector('input[name="review-source"][value="ticket"]').checked = true;
+    setReviewSource("ticket");
+  }
+  if (m === "ticket") {
+    document.getElementById("ticket-input").value = "";
   }
   if (m === "resume" && !resumables.length) {
     resumables = await fetch("/api/resumable").then((r) => r.json()).catch(() => []);
@@ -405,10 +432,49 @@ async function setMode(m) {
   renderList();
 }
 
-function launchReview() {
-  const ticket = document.getElementById("review-ticket").value.trim();
+function reviewSource() {
+  const el = document.querySelector('input[name="review-source"]:checked');
+  return el ? el.value : "ticket";
+}
+
+function setReviewSource(src) {
+  const label = document.getElementById("review-input-label");
+  const hint = document.getElementById("review-input-hint");
+  const input = document.getElementById("review-ticket");
+  if (src === "pr") {
+    label.textContent = "GitHub PR";
+    input.placeholder = "PR URL or owner/repo#123";
+    hint.textContent = "The PR is reviewed directly via `gh` — no Linear ticket needed.";
+  } else {
+    label.textContent = "Linear ticket";
+    input.placeholder = "e.g. BLUE-900";
+    hint.textContent = "The repository is taken from the PR in the ticket — no directory needed.";
+  }
+}
+
+function launchTicket() {
+  let ticket = document.getElementById("ticket-input").value.trim();
   if (!ticket) { alert("Enter a Linear ticket number."); return; }
-  createSession({ mode: "review", ticket, model: selectedModel() });
+  if (/^\d+$/.test(ticket)) ticket = "BLUE-" + ticket; // bare number → default project
+  createSession({ mode: "ticket", ticket, model: selectedModel() });
+}
+
+function launchReview() {
+  const source = reviewSource();
+  const value = document.getElementById("review-ticket").value.trim();
+  if (!value) {
+    alert(source === "pr" ? "Enter a GitHub PR (URL or owner/repo#123)." : "Enter a Linear ticket number.");
+    return;
+  }
+  if (source === "pr") {
+    createSession({ mode: "review", pr: value, model: selectedModel() });
+  } else {
+    createSession({ mode: "review", ticket: value, model: selectedModel() });
+  }
+}
+
+function launchScratch() {
+  createSession({ mode: "scratch", model: selectedModel() });
 }
 
 function toggleNewDir() {
@@ -470,15 +536,27 @@ function renderList() {
 }
 
 let modelsLoaded = false;
+let modelList = [];
 async function populateModels() {
   if (modelsLoaded) return;
-  const list = await fetch("/api/models").then((r) => r.json()).catch(() => []);
+  modelList = await fetch("/api/models").then((r) => r.json()).catch(() => []);
   document.getElementById("model-sel").innerHTML =
-    list.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
+    modelList.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
   modelsLoaded = true;
+  onModelChange();
+}
+function onModelChange() {
+  const family = document.getElementById("model-sel").value;
+  const ver = document.getElementById("model-ver");
+  const m = modelList.find((x) => x.id === family);
+  const versions = (m && m.versions) || [];
+  ver.innerHTML = `<option value="">latest</option>` +
+    versions.map((v) => `<option value="${esc(v.id)}">${esc(v.label)}</option>`).join("");
+  ver.disabled = !versions.length;
 }
 function selectedModel() {
-  return document.getElementById("model-sel").value;
+  // A pinned version (full model id) wins over the family alias.
+  return document.getElementById("model-ver").value || document.getElementById("model-sel").value;
 }
 
 function launchRepo(r) {
@@ -506,9 +584,41 @@ async function createSession(body) {
   trySelect();
 }
 
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); closeSettings(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); closeSettings(); closeDebug(); } });
 
 /* ---------- settings ---------- */
+
+/* ---------- prompt debug ---------- */
+
+let debugDump = null;
+
+async function openDebug() {
+  const body = document.getElementById("debug-body");
+  body.innerHTML = `<div class="debug-empty">Loading…</div>`;
+  document.getElementById("debug-overlay").classList.add("open");
+
+  let dump = [];
+  try { dump = await fetch("/api/debug/prompts").then((r) => r.json()); } catch { /* leave empty */ }
+  debugDump = dump;
+  if (!dump || !dump.length) {
+    body.innerHTML = `<div class="debug-empty">No session is currently asking permission.</div>`;
+    return;
+  }
+  body.innerHTML = dump.map((d) => `
+    <div class="debug-sess">
+      <div class="debug-name">${esc(d.name)} <span class="debug-id">${esc(d.id)}</span></div>
+      <div class="debug-kv"><b>question</b> ${esc(d.question || "—")}</div>
+      <div class="debug-kv"><b>context</b> <pre class="debug-ctx">${esc(d.context || "—")}</pre></div>
+      <div class="debug-kv"><b>options</b> ${(d.options || []).map((o) => `<span class="debug-opt">${o.num}. ${esc(o.label)}</span>`).join(" ") || "—"}</div>
+      <details><summary>stripped output (${(d.stripped || "").length} chars)</summary><pre class="debug-raw">${esc(d.stripped)}</pre></details>
+    </div>`).join("");
+}
+
+function closeDebug() { document.getElementById("debug-overlay").classList.remove("open"); }
+
+function copyDebug() {
+  if (debugDump) navigator.clipboard.writeText(JSON.stringify(debugDump, null, 2));
+}
 
 const settingsOverlay = document.getElementById("settings-overlay");
 

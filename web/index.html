@@ -19,7 +19,7 @@
     <div class="logo">Agor<span>AI</span></div>
     <div class="newbar">
       <button class="new-btn" onclick="openModal('open')"><b>+</b> New Session</button>
-      <button class="new-btn" onclick="openModal('worktree')"><b>+</b> New Session in new branch</button>
+      <button class="new-btn" onclick="openModal('ticket')">✦ New Session for Ticket</button>
       <button class="new-btn" onclick="openModal('resume')">↻ Resume Session</button>
       <button class="new-btn" onclick="openModal('review')">⊚ Review PR</button>
     </div>
@@ -43,6 +43,7 @@
         <span class="t-name" id="t-name">AgorAI</span>
         <span class="t-cwd" id="t-cwd"></span>
         <span class="t-right" id="t-right"></span>
+        <button class="icon-btn" id="debug-btn" onclick="openDebug()" title="Show permission-prompt debug (what the parser saw)">🐞</button>
       </div>
       <div id="findbar">
         <input id="find-input" placeholder="Find in terminal…" autocomplete="off" oninput="doFind('incremental')">
@@ -58,10 +59,10 @@
   </div>
 
   <div class="statusbar">
-    <span><span class="hot">click</span> a session to focus</span>
-    <span><span class="hot">type</span> goes to the focused session</span>
-    <span><span class="hot">click</span> Yes/No/Always to answer a prompt</span>
-    <span><span class="hot">dbl-click</span> a name to rename</span>
+    <span class="legend"><span class="dot perm"></span> needs permission</span>
+    <span class="legend"><span class="dot" style="background:var(--green)"></span> finished (unchecked)</span>
+    <span class="legend"><span class="dot" style="background:var(--yellow)"></span> working</span>
+    <span class="legend"><span class="dot"></span> idle / ended</span>
     <span class="sp" id="status-count"></span>
   </div>
 
@@ -70,8 +71,9 @@
     <div class="modal" id="modal">
       <h2 id="modal-title">New <span>session</span></h2>
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
-      <div class="model-row"><span>Model</span><select id="model-sel"></select></div>
+      <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
       <label class="newdir-toggle"><input type="checkbox" id="newdir-chk" onchange="toggleNewDir()"> Create a new directory for this session</label>
+      <div class="scratch-row"><button type="button" class="scratch-btn" onclick="launchScratch()">▷ Start without a repo <small>· runs in ~/.agorai/scratch</small></button></div>
       <div class="newdir-form">
         <label class="field"><span class="field-label">Parent folder</span>
           <select id="newdir-parent"></select></label>
@@ -83,13 +85,35 @@
       <div class="wt-note">A fresh git worktree + branch is created so this session can edit in parallel without touching your other checkouts.</div>
       <div class="resume-note">Re-opens a past session with its full history in a hosted terminal. Don't run the same session in two places at once.</div>
       <label class="resume-opts"><input type="checkbox" id="fork-chk"> Fork a copy — use if the session is still running (e.g. a <code>claude agents</code> bg session)</label>
-      <div class="review-form">
+      <div class="ticket-form">
         <label class="field"><span class="field-label">Linear ticket</span>
+          <input id="ticket-input" placeholder="e.g. BLUE-900" autocomplete="off"></label>
+        <div class="field-hint">Claude will find the linked PR, check it out under <code>~/dev/PRs/&lt;ticket&gt;</code>, and propose an implementation plan.</div>
+        <button class="review-go" onclick="launchTicket()">Start session</button>
+      </div>
+      <div class="review-form">
+        <div class="review-source">
+          <label><input type="radio" name="review-source" value="ticket" checked onchange="setReviewSource('ticket')"> Linear ticket</label>
+          <label><input type="radio" name="review-source" value="pr" onchange="setReviewSource('pr')"> GitHub PR</label>
+        </div>
+        <label class="field"><span class="field-label" id="review-input-label">Linear ticket</span>
           <input id="review-ticket" placeholder="e.g. BLUE-900" autocomplete="off"></label>
-        <div class="field-hint">The repository is taken from the PR in the ticket — no directory needed.</div>
+        <div class="field-hint" id="review-input-hint">The repository is taken from the PR in the ticket — no directory needed.</div>
         <button class="review-go" onclick="launchReview()">Start review</button>
       </div>
       <div class="repo-list" id="repo-list"></div>
+    </div>
+  </div>
+
+  <!-- Prompt debug modal -->
+  <div class="overlay" id="debug-overlay" onclick="if(event.target===this)closeDebug()">
+    <div class="modal debug-modal">
+      <h2>Prompt <span>debug</span></h2>
+      <div class="debug-body" id="debug-body"></div>
+      <div class="settings-actions">
+        <button type="button" onclick="copyDebug()">Copy JSON</button>
+        <button type="button" class="primary" onclick="closeDebug()">Close</button>
+      </div>
     </div>
   </div>
 

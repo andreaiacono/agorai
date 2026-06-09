@@ -91,12 +91,15 @@ body {
 .session.selected { background: var(--panel-2); border-color: var(--accent); }
 .session .row1 { display: flex; align-items: center; gap: 8px; }
 
-.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.dot.working { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
-.dot.idle    { background: var(--dim); }
-.dot.waiting { background: var(--yellow); }
-.dot.perm    { background: var(--red); }
-.dot.done    { background: var(--green); }
+/* Four buckets:
+   - perm → red (blinks) : a permission prompt is waiting for your answer
+   - finished, unread → green (blinks) : finished / wants input, not looked at yet
+   - working → amber (steady) : busy, no action needed
+   - everything else → grey : already checked, or ended */
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+.dot.perm { background: var(--red); }
+.session.working .dot { background: var(--yellow); }
+.session.unread:not(.perm) .dot { background: var(--green); }
 
 .name { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .x { color: var(--dim); flex: none; opacity: 0; padding: 0 2px; font-size: 11px; transition: opacity .1s, color .1s; }
@@ -114,24 +117,19 @@ body {
 }
 
 .badge { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; padding: 1px 6px; border-radius: 10px; flex: none; }
-.badge.input { background: rgba(227,179,65,.15); color: var(--yellow); }
 .badge.perm  { background: rgba(240,80,110,.15); color: var(--red); }
 
-/* blink when a session needs the user */
-@keyframes blink-name { 50% { opacity: .35; } }
-
-/* State sets the (solid) colour … */
+/* Name colour matches the dot bucket. */
 .session.working .name { color: var(--yellow); }
-.session.waiting .name { color: var(--yellow); }
-.session.perm    .name { color: var(--red); }
+.session.perm .name { color: var(--red); }
+.session.unread:not(.perm) .name { color: var(--green); }
 
-/* … and "unread" (unviewed since it wanted attention) drives the blink.
-   Clicking the row clears unread → blinking stops but the colour/badge stays.
-   A just-finished (idle) session blinks green. */
+/* Blink only while it wants attention and you haven't looked (unread): a pending
+   permission (red) or a just-finished turn (green). Working is amber but steady.
+   Clicking the row clears unread → blinking stops; permission stays solid red. */
+@keyframes blink-name { 50% { opacity: .35; } }
 .session.unread .name { animation: blink-name 1.1s step-start infinite; }
 .session.unread .dot  { animation: blink-name 1.1s step-start infinite; }
-.session.unread.idle .name { color: var(--green); }
-.session.unread.idle .dot  { background: var(--green); }
 
 /* inline permission prompt */
 .prompt { margin-top: 9px; padding: 9px; background: #1d141a; border: 1px solid rgba(240,80,110,.35); border-radius: 6px; }
@@ -177,6 +175,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .statusbar { display: flex; gap: 18px; align-items: center; padding: 5px 14px; background: var(--panel); border-top: 1px solid var(--border); color: var(--dim); font-size: 11px; }
 .statusbar .hot { color: var(--text); }
 .statusbar .sp { margin-left: auto; }
+.statusbar .legend { display: inline-flex; align-items: center; gap: 5px; }
 
 /* modal */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start; justify-content: center; padding-top: 70px; z-index: 10; }
@@ -190,22 +189,46 @@ body.resizing { cursor: col-resize; user-select: none; }
 .model-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; color: var(--dim); font-size: 11px; }
 .model-row select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; }
 .model-row select:focus { outline: none; border-color: var(--accent); }
+.model-row select:disabled { opacity: 0.45; cursor: not-allowed; }
 .wt-note, .resume-note { display: none; margin: 0 16px 12px; padding: 8px 10px; background: rgba(74,163,255,.08); border: 1px solid rgba(74,163,255,.25); border-radius: 6px; color: var(--dim); font-size: 11px; }
 .modal.wt-mode .wt-note { display: block; }
 .modal.resume-mode .resume-note { display: block; }
 .resume-opts { display: none; align-items: center; gap: 7px; margin: 0 16px 10px; color: var(--dim); font-size: 11px; cursor: pointer; }
 .modal.resume-mode .resume-opts { display: flex; }
 /* review mode: hide the list/filter, show the repo + ticket form */
-.review-form { display: none; padding: 4px 16px 14px; }
+.review-form, .ticket-form { display: none; padding: 4px 16px 14px; }
 .modal.review-mode .review-form { display: block; }
-.modal.review-mode .search, .modal.review-mode .repo-list { display: none; }
-#review-ticket { width: 100%; box-sizing: border-box; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
-#review-ticket:focus { outline: none; border-color: var(--accent); }
+.modal.ticket-mode .ticket-form { display: block; }
+.review-source { display: flex; gap: 18px; margin-bottom: 14px; }
+.review-source label { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
+.modal.review-mode .search, .modal.review-mode .repo-list,
+.modal.ticket-mode .search, .modal.ticket-mode .repo-list { display: none; }
+#review-ticket, #ticket-input { width: 100%; box-sizing: border-box; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+#review-ticket:focus, #ticket-input:focus { outline: none; border-color: var(--accent); }
 .field-hint { color: var(--dim); font-size: 11px; margin: -8px 0 14px; }
 .review-go { font: inherit; font-weight: 600; background: var(--accent); color: #06121f; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; margin-top: 4px; }
 /* new-directory toggle + form (open mode only) */
 .newdir-toggle { display: flex; align-items: center; gap: 7px; margin: 0 16px 10px; color: var(--dim); font-size: 11px; cursor: pointer; }
-.modal.wt-mode .newdir-toggle, .modal.resume-mode .newdir-toggle, .modal.review-mode .newdir-toggle { display: none; }
+.modal.wt-mode .newdir-toggle, .modal.resume-mode .newdir-toggle, .modal.review-mode .newdir-toggle, .modal.ticket-mode .newdir-toggle { display: none; }
+.scratch-row { margin: 0 16px 10px; }
+.modal.wt-mode .scratch-row, .modal.resume-mode .scratch-row, .modal.review-mode .scratch-row, .modal.newdir-mode .scratch-row, .modal.ticket-mode .scratch-row { display: none; }
+.scratch-btn { font: inherit; width: 100%; text-align: left; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+.scratch-btn:hover { border-color: var(--accent); }
+.scratch-btn small { color: var(--dim); }
+
+/* prompt debug modal */
+.debug-modal { width: min(900px, 90vw); }
+.debug-body { max-height: 60vh; overflow: auto; padding: 4px 16px 8px; }
+.debug-empty { color: var(--dim); padding: 12px 0 16px; }
+.debug-sess { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+.debug-name { font-weight: 600; margin-bottom: 8px; }
+.debug-id { color: var(--dim); font-weight: 400; font-size: 11px; }
+.debug-kv { margin-bottom: 6px; }
+.debug-kv b { color: var(--dim); font-weight: 600; margin-right: 6px; }
+.debug-ctx { display: inline-block; vertical-align: top; margin: 0; white-space: pre-wrap; color: var(--text); }
+.debug-opt { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 1px 7px; margin: 0 4px 4px 0; }
+.debug-sess details summary { color: var(--dim); cursor: pointer; margin-top: 4px; }
+.debug-raw { white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; max-height: 30vh; overflow: auto; font-size: 11px; }
 .newdir-form { display: none; }
 .modal.newdir-mode .newdir-form { display: block; padding: 4px 16px 14px; }
 .modal.newdir-mode .search, .modal.newdir-mode .repo-list { display: none; }
