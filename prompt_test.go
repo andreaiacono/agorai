@@ -13,7 +13,7 @@ func TestParsePermissionPrompt_threeOptions(t *testing.T) {
 		"│   3. No, tell Claude what to do differently │\r\n" +
 		"\x1b[2m╰───────────────────────────╯\x1b[0m\r\n")
 
-	q, opts := parsePermissionPrompt(raw)
+	q, _, opts := parsePermissionPrompt(raw)
 	if len(opts) != 3 {
 		t.Fatalf("want 3 options, got %d: %+v", len(opts), opts)
 	}
@@ -30,7 +30,7 @@ func TestParsePermissionPrompt_threeOptions(t *testing.T) {
 
 func TestParsePermissionPrompt_twoOptions(t *testing.T) {
 	raw := []byte("Proceed?\r\n  1. Yes\r\n  2. No\r\n")
-	_, opts := parsePermissionPrompt(raw)
+	_, _, opts := parsePermissionPrompt(raw)
 	if len(opts) != 2 {
 		t.Fatalf("want 2 options, got %d: %+v", len(opts), opts)
 	}
@@ -41,7 +41,7 @@ func TestParsePermissionPrompt_lastFrameWins(t *testing.T) {
 	raw := []byte("Q?\r\n 1. Old A\r\n 2. Old B\r\n" +
 		"\x1b[3A" + // cursor up (stripped)
 		"Q?\r\n 1. New A\r\n 2. New B\r\n")
-	_, opts := parsePermissionPrompt(raw)
+	_, _, opts := parsePermissionPrompt(raw)
 	if len(opts) != 2 || opts[0].Label != "New A" || opts[1].Label != "New B" {
 		t.Fatalf("expected latest frame, got %+v", opts)
 	}
@@ -55,7 +55,7 @@ func TestParsePermissionPrompt_realBashApproval(t *testing.T) {
 		"\x1b[36m❯ 1. Yes\x1b[0m\r\n" +
 		"  2. Yes, and don't ask again for: timeout 120 nc *\r\n" +
 		"  3. No\r\n")
-	q, opts := parsePermissionPrompt(raw)
+	q, _, opts := parsePermissionPrompt(raw)
 	if len(opts) != 3 {
 		t.Fatalf("want 3, got %d: %+v", len(opts), opts)
 	}
@@ -70,7 +70,7 @@ func TestParsePermissionPrompt_realBashApproval(t *testing.T) {
 func TestParsePermissionPrompt_spacelessThree(t *testing.T) {
 	// the real shape: cursor-positioned, so spaces are gone and no space after "."
 	raw := []byte("Doyouwanttoproceed?\r\r\n❯1.Yes\r\r\n2.Yes,andalwaysallow\r\r\n3.No\r\r\n")
-	_, opts := parsePermissionPrompt(raw)
+	_, _, opts := parsePermissionPrompt(raw)
 	if len(opts) != 3 {
 		t.Fatalf("want 3, got %d: %+v", len(opts), opts)
 	}
@@ -81,14 +81,80 @@ func TestParsePermissionPrompt_spacelessThree(t *testing.T) {
 
 func TestParsePermissionPrompt_spacelessTwo(t *testing.T) {
 	raw := []byte("Doyouwanttoproceed?\r\r\n❯1.Yes\r\r\n2.No\r\r\n")
-	_, opts := parsePermissionPrompt(raw)
+	_, _, opts := parsePermissionPrompt(raw)
 	if len(opts) != 2 {
 		t.Fatalf("want 2 (yes/no), got %d: %+v", len(opts), opts)
 	}
 }
 
+func TestParsePermissionPrompt_mangledRedraw(t *testing.T) {
+	// real shape seen in the wild: a complete render followed by a repaint that
+	// ate the "." after options 2 and 3, so only "1. Yes" parses in the newest
+	// frame — the parser must fall back to the earlier complete frame
+	raw := []byte("Fetch unresolved review threads on PR 6934\r\r\n" +
+		"Do you want to proceed?\r\r\n" +
+		"❯ 1. Yes\r\r\n" +
+		"  2. Yes, and always allow access to tmp/ from this project\r\r\n" +
+		"  3. No\r\r\n" +
+		"Esc to cancel · Tab to amend · ctrl+e to explain\r" +
+		"Do you want to proceed?\r ❯ 1. Yes\r   2 Yes, and always allow access to tmp/ from this project\r 3 No\r")
+	q, ctx, opts := parsePermissionPrompt(raw)
+	if len(opts) != 3 {
+		t.Fatalf("want 3 options, got %d: %+v", len(opts), opts)
+	}
+	if !strings.Contains(opts[1].Label, "always allow access to tmp/") {
+		t.Errorf("option 2 wrong: %+v", opts[1])
+	}
+	if opts[2].Label != "No" {
+		t.Errorf("option 3 wrong: %+v", opts[2])
+	}
+	if !strings.Contains(q, "proceed") {
+		t.Errorf("question not captured: %q", q)
+	}
+	if !strings.Contains(ctx, "Fetch unresolved review threads") {
+		t.Errorf("context not captured: %q", ctx)
+	}
+	if strings.Contains(ctx, "Esc to cancel") {
+		t.Errorf("context kept UI chrome: %q", ctx)
+	}
+	if strings.Contains(ctx, "proceed") {
+		t.Errorf("context must not repeat the question line: %q", ctx)
+	}
+}
+
+func TestParsePermissionPrompt_mangledRedrawOfDifferentPrompt(t *testing.T) {
+	// an incomplete newest frame must NOT inherit options from an older frame
+	// whose labels don't agree (that's a different prompt, not a re-render)
+	raw := []byte("Run rm -rf?\r\n❯ 1. Allow\r\n  2. Deny\r\n" +
+		"Do you want to proceed?\r\n❯ 1. Yes\r\n  2 No\r\n")
+	_, _, opts := parsePermissionPrompt(raw)
+	if len(opts) != 1 || opts[0].Label != "Yes" {
+		t.Fatalf("expected only the newest frame's option, got %+v", opts)
+	}
+}
+
+func TestParsePermissionPrompt_contextSkipsRepaintDebris(t *testing.T) {
+	// real shape: repaint confetti ("h t", "✢ r e") and a re-rendered question
+	// (appears twice with no option line between) must not pollute the context
+	raw := []byte("h t\r\nc s\r\n✢ r e\r\n· O h\r\n" +
+		"←  ☐ Refactor  ☐ Accrual offset  ☐ Product FK ✔ Submit →\r\n" +
+		"How should I proceed with the big refactor?\r\n" +
+		"How should I proceed with the big refactor?\r\n" +
+		"❯ 1. Yes\r\n  2. No\r\n")
+	q, ctx, opts := parsePermissionPrompt(raw)
+	if len(opts) != 2 {
+		t.Fatalf("want 2 options, got %d: %+v", len(opts), opts)
+	}
+	if q != "How should I proceed with the big refactor?" {
+		t.Errorf("question wrong: %q", q)
+	}
+	if ctx != "←  ☐ Refactor  ☐ Accrual offset  ☐ Product FK ✔ Submit →" {
+		t.Errorf("context wrong (debris or repeated question kept): %q", ctx)
+	}
+}
+
 func TestParsePermissionPrompt_none(t *testing.T) {
-	_, opts := parsePermissionPrompt([]byte("just some normal output\nno prompt here\n"))
+	_, _, opts := parsePermissionPrompt([]byte("just some normal output\nno prompt here\n"))
 	if opts != nil {
 		t.Fatalf("expected nil, got %+v", opts)
 	}

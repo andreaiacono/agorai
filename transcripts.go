@@ -84,6 +84,7 @@ type transcriptEntry struct {
 
 type transcriptMessage struct {
 	Role    string          `json:"role"`
+	Model   string          `json:"model"`
 	Content json.RawMessage `json:"content"`
 }
 
@@ -159,18 +160,27 @@ func parseTranscript(path string, mod time.Time) (Resumable, bool) {
 }
 
 // lastAssistantLine returns the last assistant text in a transcript, one line,
-// truncated. It reads only the tail of the file so it stays cheap on long
-// sessions (an assistant turn is virtually always within the last window).
+// truncated.
 func lastAssistantLine(path string) string {
+	line, _ := lastAssistantInfo(path)
+	return line
+}
+
+// lastAssistantInfo returns the last assistant text (one line, truncated) and
+// the raw model id of the last assistant message — the latter reveals what
+// model a "default" session actually runs on. It reads only the tail of the
+// file so it stays cheap on long sessions (an assistant turn is virtually
+// always within the last window).
+func lastAssistantInfo(path string) (string, string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer f.Close()
 
 	st, err := f.Stat()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	const window = 256 * 1024
 	start := int64(0)
@@ -178,7 +188,7 @@ func lastAssistantLine(path string) string {
 		start = st.Size() - window
 	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return ""
+		return "", ""
 	}
 	data, _ := io.ReadAll(f)
 
@@ -187,7 +197,7 @@ func lastAssistantLine(path string) string {
 		lines = lines[1:] // drop the partial first line
 	}
 
-	last := ""
+	last, model := "", ""
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -208,9 +218,12 @@ func lastAssistantLine(path string) string {
 			if t := strings.TrimSpace(extractText(m.Content)); t != "" {
 				last = t
 			}
+			if m.Model != "" {
+				model = m.Model
+			}
 		}
 	}
-	return truncate(oneLine(last), 90)
+	return truncate(oneLine(last), 90), model
 }
 
 // extractText pulls plain text out of a message's content, which may be a raw

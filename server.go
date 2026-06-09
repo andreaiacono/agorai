@@ -110,11 +110,12 @@ func (s *Server) handleDebugPrompts(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		raw := sess.recentBytes(16 * 1024)
-		q, opts := parsePermissionPrompt(raw)
+		q, ctx, opts := parsePermissionPrompt(raw)
 		out = append(out, map[string]any{
 			"id":       dto.ID,
 			"name":     dto.Name,
 			"question": q,
+			"context":  ctx,
 			"options":  opts,
 			"stripped": stripANSI(raw),
 		})
@@ -128,28 +129,66 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 
 type createReq struct {
 	Cwd       string `json:"cwd"`
-	Mode      string `json:"mode"` // "open" | "worktree" | "resume" | "review"
+	Mode      string `json:"mode"` // "open" | "worktree" | "resume" | "review" | "newdir" | "scratch" | "ticket"
 	Name      string `json:"name"`
 	SessionID string `json:"sessionId"` // for "resume"
 	Fork      bool   `json:"fork"`      // resume: branch a copy (for still-running sessions)
 	Model     string `json:"model"`     // "" | "opus" | "sonnet" | "haiku"
 	Ticket    string `json:"ticket"`    // for "review": the Linear ticket number
+	Pr        string `json:"pr"`        // for "review": a GitHub PR (URL or owner/repo#123), detached from a ticket
 	Parent    string `json:"parent"`    // for "newdir": the parent root dir
 	Dir       string `json:"dir"`       // for "newdir": the new folder name
 	GitInit   bool   `json:"gitInit"`   // for "newdir": run `git init`
 }
 
-// reviewPromptTemplate is the initial prompt for a review session; $TICKET is
-// replaced with the user-supplied ticket and passed to claude as its first message.
-const reviewPromptTemplate = "Please spawn the reviewers for the PR contained in the linear ticket $TICKET, using the ticket description as a base for analysing the PR content. The repository to review is the one the PR belongs to — determine it from the ticket/PR, don't assume any local directory. Please don't checkout the branch, just work with `gh`."
+// reviewPromptTemplate is the initial prompt for a ticket-based review session;
+// $TICKET is replaced with the user-supplied Linear ticket and passed to claude
+// as its first message.
+const reviewPromptTemplate = "Please spawn the reviewers for the PR contained in the linear ticket $TICKET, using the ticket description as a base for analysing the PR content. The repository to review is the one the PR belongs to — determine it from the ticket/PR, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read."
+
+// reviewPrPromptTemplate is the initial prompt for a review of a GitHub PR that
+// is detached from any Linear ticket; $PR is replaced with the user-supplied PR
+// reference (a URL or `owner/repo#123`).
+const reviewPrPromptTemplate = "Please spawn the reviewers for the GitHub PR $PR. The repository to review is the one the PR belongs to — determine it from the PR reference, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read."
+
+// ticketPlanPromptTemplate is the initial prompt for a "session for ticket":
+// Claude finds the ticket's PR, checks it out under the PRs workspace, and
+// produces an implementation plan. $TICKET and $DIR are filled in at spawn time.
+const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICKET. " +
+	"First, look up the ticket to understand its requirements and find the GitHub PR linked to it. " +
+	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET) and check out the PR's branch there with `gh pr checkout` (clone the repository into it first if needed). " +
+	"Then analyze the PR's changes against the ticket's requirements and give me a clear, actionable implementation plan: what the PR already covers, what is missing or incorrect, edge cases and tests to consider, and the concrete next steps with file paths. " +
+	"Treat the ticket description as the source of truth for the desired end state. Don't push, comment on GitHub/Linear, or open new PRs — just produce the plan here for me to review."
 
 // reviewWorkspace is a dedicated dir for review sessions (gh-only, repo-agnostic).
-func reviewWorkspace() string {
+func reviewWorkspace() string { return appWorkspace("review") }
+
+// scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
+func scratchWorkspace() string { return appWorkspace("scratch") }
+
+// ticketWorkspace is where "session for ticket" sessions land: ~/dev/PRs, the
+// parent under which Claude checks out each ticket's PR into its own subdir.
+func ticketWorkspace() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return "/tmp"
 	}
-	dir := filepath.Join(home, ".agorai", "review")
+	dir := filepath.Join(home, "dev", "PRs")
+	if os.MkdirAll(dir, 0o755) != nil {
+		return home
+	}
+	return dir
+}
+
+// appWorkspace returns ~/.agorai/<name>, creating it if needed — a contained
+// home for sessions that don't belong to a repo, so folder-trust is accepted
+// once per workspace instead of for the whole home dir.
+func appWorkspace(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "/tmp"
+	}
+	dir := filepath.Join(home, ".agorai", name)
 	if os.MkdirAll(dir, 0o755) != nil {
 		return home
 	}
@@ -206,27 +245,85 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// (passed to claude as its first message via the positional prompt arg).
 	if req.Mode == "review" {
 		ticket := strings.TrimSpace(req.Ticket)
-		if ticket == "" {
-			http.Error(w, "ticket required", http.StatusBadRequest)
+		pr := strings.TrimSpace(req.Pr)
+		if ticket == "" && pr == "" {
+			http.Error(w, "ticket or pr required", http.StatusBadRequest)
 			return
 		}
 		// No repo to choose — the review works via `gh` and finds the PR's repo
-		// from the ticket. Spawn in a dedicated workspace (not the whole home dir)
-		// so its folder-trust stays contained and is accepted just once.
+		// from the ticket/PR reference. Spawn in a dedicated workspace (not the
+		// whole home dir) so its folder-trust stays contained and is accepted once.
 		cwd := reviewWorkspace()
-		prompt := strings.ReplaceAll(reviewPromptTemplate, "$TICKET", ticket)
+		var prompt, label, recap string
+		if pr != "" {
+			prompt = strings.ReplaceAll(reviewPrPromptTemplate, "$PR", pr)
+			label = "Review " + pr
+			recap = "Reviewing " + pr + "…"
+		} else {
+			prompt = strings.ReplaceAll(reviewPromptTemplate, "$TICKET", ticket)
+			label = "Review " + ticket
+			recap = "Reviewing " + ticket + "…"
+		}
 
+		// A review only reads the PR via `gh` (no checkout/writes), so skip
+		// permission prompts entirely — it runs unattended. Also drop DATABASE_URL
+		// so the reviewer can't run DB queries.
 		sid := newUUID()
-		args := append([]string{"--session-id", sid}, modelArgs(model)...)
+		args := []string{"--session-id", sid, "--dangerously-skip-permissions"}
+		args = append(args, modelArgs(model)...)
 		args = append(args, prompt) // positional → claude submits it as the first message
 
-		sess, err := s.mgr.Spawn(cwd, "Review "+ticket, "", args...)
+		sess, err := s.mgr.SpawnWithoutEnv(cwd, label, "", []string{"DATABASE_URL"}, args...)
 		if err != nil {
 			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		sess.setModel(model)
-		sess.setRecap("Reviewing " + ticket + "…")
+		sess.setRecap(recap)
+		s.mgr.adopt(sess, sid)
+		writeJSON(w, map[string]string{"id": sess.ID})
+		return
+	}
+
+	// Ticket: a working session for a Linear ticket. Spawn in the PRs workspace;
+	// Claude looks up the ticket, checks out its PR into a subdir, and produces
+	// an implementation plan. Permissions stay ON — this is real interactive work.
+	if req.Mode == "ticket" {
+		ticket := strings.TrimSpace(req.Ticket)
+		if ticket == "" {
+			http.Error(w, "ticket required", http.StatusBadRequest)
+			return
+		}
+		dir := ticketWorkspace()
+		prompt := strings.NewReplacer("$TICKET", ticket, "$DIR", dir).Replace(ticketPlanPromptTemplate)
+
+		sid := newUUID()
+		args := append([]string{"--session-id", sid}, modelArgs(model)...)
+		args = append(args, prompt) // positional → claude submits it as the first message
+
+		sess, err := s.mgr.Spawn(dir, "Ticket "+ticket, "", args...)
+		if err != nil {
+			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sess.setModel(model)
+		sess.setRecap("Planning " + ticket + "…")
+		s.mgr.adopt(sess, sid)
+		writeJSON(w, map[string]string{"id": sess.ID})
+		return
+	}
+
+	// Scratch: a free session not tied to any repo/directory — runs in a
+	// dedicated workspace under ~/.agorai so nothing needs to be picked.
+	if req.Mode == "scratch" {
+		sid := newUUID()
+		args := append([]string{"--session-id", sid}, modelArgs(model)...)
+		sess, err := s.mgr.Spawn(scratchWorkspace(), "Scratch", "", args...)
+		if err != nil {
+			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sess.setModel(model)
 		s.mgr.adopt(sess, sid)
 		writeJSON(w, map[string]string{"id": sess.ID})
 		return
@@ -361,10 +458,15 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The recap is the last assistant line of the chat. Fall back to a status
-	// label only when the transcript has nothing to show yet.
+	// label only when the transcript has nothing to show yet. The transcript
+	// also reveals the real model id (what "default" resolves to).
 	recap := ""
 	if p.TranscriptPath != "" {
-		recap = lastAssistantLine(p.TranscriptPath)
+		var actualModel string
+		recap, actualModel = lastAssistantInfo(p.TranscriptPath)
+		if actualModel != "" {
+			sess.setActualModel(actualModel)
+		}
 	}
 
 	switch {
@@ -406,9 +508,9 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 // uses generic Yes/No/Always buttons).
 func (s *Server) parsePromptSoon(sess *Session) {
 	for i := 0; i < 8; i++ {
-		q, opts := parsePermissionPrompt(sess.recentBytes(16 * 1024))
+		q, ctx, opts := parsePermissionPrompt(sess.recentBytes(16 * 1024))
 		if len(opts) > 0 {
-			sess.setPrompt(q, opts)
+			sess.setPrompt(q, ctx, opts)
 			s.broadcastSessions()
 			return
 		}
@@ -422,7 +524,11 @@ func (s *Server) parsePromptSoon(sess *Session) {
 func (s *Server) refreshRecapSoon(sess *Session, path, prev string) {
 	for i := 0; i < 6; i++ {
 		time.Sleep(300 * time.Millisecond)
-		if late := lastAssistantLine(path); late != "" && late != prev {
+		late, actualModel := lastAssistantInfo(path)
+		if actualModel != "" {
+			sess.setActualModel(actualModel)
+		}
+		if late != "" && late != prev {
 			sess.setRecap(late)
 			s.broadcastSessions()
 			return
@@ -482,6 +588,7 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 
 	// reader loop: browser -> PTY. Keystrokes arrive as binary; text frames are
 	// control messages (resize).
+	firstResize := true
 	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
@@ -492,7 +599,14 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 				Resize []uint16 `json:"resize"` // [cols, rows]
 			}
 			if json.Unmarshal(data, &msg) == nil && len(msg.Resize) == 2 {
-				sess.resize(msg.Resize[1], msg.Resize[0])
+				if firstResize {
+					// This viewer just replayed the ring buffer; force claude to
+					// repaint its live region even if the size didn't change.
+					firstResize = false
+					sess.resizeRepaint(msg.Resize[1], msg.Resize[0])
+				} else {
+					sess.resize(msg.Resize[1], msg.Resize[0])
+				}
 			}
 			continue
 		}

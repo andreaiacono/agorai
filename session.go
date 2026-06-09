@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -27,28 +29,30 @@ type Session struct {
 	ID       string // our launch id (passed to claude as AGORAI_ID)
 	ClaudeID string // claude's own session_id, learned from the first hook
 
-	mu       sync.Mutex
-	name     string
-	cwd      string
-	branch   string
-	model    string // model id passed to --model ("" = default)
-	state     string
-	recap     string
-	promptQ   string         // parsed question for a permission prompt
-	promptOpts []PromptOption // parsed options for a permission prompt
-	resumeOf  string         // claude id we resumed from; cleaned up once the live id is known
-	ptmx     *os.File
-	cmd      *exec.Cmd
-	ring     *ringBuffer
-	clients  map[chan []byte]bool // attached terminal WebSockets
+	mu          sync.Mutex
+	name        string
+	cwd         string
+	branch      string
+	model       string // model id passed to --model ("" = default)
+	actualModel string // raw model id seen in the transcript — resolves what "default" runs on
+	state       string
+	recap       string
+	promptQ     string         // parsed question for a permission prompt
+	promptCtx   string         // parsed context lines above the question (for the tooltip)
+	promptOpts  []PromptOption // parsed options for a permission prompt
+	resumeOf    string         // claude id we resumed from; cleaned up once the live id is known
+	ptmx        *os.File
+	cmd         *exec.Cmd
+	ring        *ringBuffer
+	clients     map[chan []byte]bool // attached terminal WebSockets
 }
 
 // SessionDTO is the JSON shape sent to the browser.
 type SessionDTO struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Cwd    string `json:"cwd"`
-	Branch string `json:"branch"`
+	ID     string      `json:"id"`
+	Name   string      `json:"name"`
+	Cwd    string      `json:"cwd"`
+	Branch string      `json:"branch"`
 	State  string      `json:"state"`
 	Recap  string      `json:"recap"`
 	Model  string      `json:"model"` // display label, e.g. "Opus" / "default"
@@ -60,17 +64,24 @@ func (s *Session) dto() SessionDTO {
 	defer s.mu.Unlock()
 	var prompt *PromptInfo
 	if s.state == StatePerm && len(s.promptOpts) > 0 {
-		prompt = &PromptInfo{Question: s.promptQ, Options: s.promptOpts}
+		prompt = &PromptInfo{Question: s.promptQ, Context: s.promptCtx, Options: s.promptOpts}
+	}
+	// Prefer the model actually seen in the transcript: it shows the real
+	// version behind a "default" or alias choice (e.g. "Opus 4.8", not "default").
+	model := modelLabel(s.model)
+	if s.actualModel != "" {
+		model = prettyModelID(s.actualModel)
 	}
 	return SessionDTO{
 		ID: s.ID, Name: s.name, Cwd: s.cwd, Branch: s.branch,
-		State: s.state, Recap: s.recap, Model: modelLabel(s.model), Prompt: prompt,
+		State: s.state, Recap: s.recap, Model: model, Prompt: prompt,
 	}
 }
 
-func (s *Session) setPrompt(question string, opts []PromptOption) {
+func (s *Session) setPrompt(question, context string, opts []PromptOption) {
 	s.mu.Lock()
 	s.promptQ = question
+	s.promptCtx = context
 	s.promptOpts = opts
 	s.mu.Unlock()
 }
@@ -84,6 +95,12 @@ func (s *Session) recentBytes(n int) []byte {
 		b = b[len(b)-n:]
 	}
 	return append([]byte(nil), b...)
+}
+
+func (s *Session) setActualModel(id string) {
+	s.mu.Lock()
+	s.actualModel = id
+	s.mu.Unlock()
 }
 
 func (s *Session) setModel(id string) {
@@ -178,6 +195,24 @@ func (s *Session) resize(rows, cols uint16) {
 	}
 }
 
+// resizeRepaint sets the PTY size like resize, but when the size is unchanged
+// it briefly wiggles the width to force a SIGWINCH. A freshly attached viewer
+// has just replayed old buffered bytes — the TUI's live region in that replay
+// is stale, and only a repaint by claude renders it cleanly.
+func (s *Session) resizeRepaint(rows, cols uint16) {
+	s.mu.Lock()
+	f := s.ptmx
+	s.mu.Unlock()
+	if f == nil {
+		return
+	}
+	if cur, err := pty.GetsizeFull(f); err == nil && cur.Rows == rows && cur.Cols == cols && cols > 1 {
+		_ = pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols - 1})
+		time.Sleep(50 * time.Millisecond) // let the TUI process the shrink first
+	}
+	_ = pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols})
+}
+
 // readLoop pumps PTY output into the ring buffer and fans it out to attached
 // clients. Slow clients drop frames rather than stalling the others.
 func (s *Session) readLoop(onChange func()) {
@@ -226,20 +261,23 @@ func NewManager(store *Store, cfg *ConfigStore) *Manager {
 // buildEnv assembles the child process environment: the inherited environment,
 // our correlation id, a sane TERM, and the user-configured extra vars (which
 // win on conflict). Deduped so the configured value is the one that takes.
-func (m *Manager) buildEnv(launchID string) []string {
+func (m *Manager) buildEnv(launchID string, exclude ...string) []string {
 	base := map[string]string{}
 	for _, kv := range os.Environ() {
 		if i := strings.IndexByte(kv, '='); i >= 0 {
 			base[kv[:i]] = kv[i+1:]
 		}
 	}
-	base["AGORAI_ID"] = launchID
-	base["TERM"] = "xterm-256color"
 	if m.cfg != nil {
 		for k, v := range m.cfg.Get().Env {
 			base[k] = v
 		}
 	}
+	for _, k := range exclude { // strip after merging both sources (e.g. DATABASE_URL)
+		delete(base, k)
+	}
+	base["AGORAI_ID"] = launchID
+	base["TERM"] = "xterm-256color"
 	out := make([]string, 0, len(base))
 	for k, v := range base {
 		out = append(out, k+"="+v)
@@ -250,11 +288,21 @@ func (m *Manager) buildEnv(launchID string) []string {
 // Spawn starts a new `claude` process in cwd and begins streaming its output.
 // extraArgs are passed to the claude CLI (e.g. "--resume", "<id>").
 func (m *Manager) Spawn(cwd, name, branch string, extraArgs ...string) (*Session, error) {
+	return m.spawn(cwd, name, branch, nil, extraArgs...)
+}
+
+// SpawnWithoutEnv is like Spawn but drops the given env vars (e.g. review
+// sessions run without DATABASE_URL so they can't query the DB).
+func (m *Manager) SpawnWithoutEnv(cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
+	return m.spawn(cwd, name, branch, excludeEnv, extraArgs...)
+}
+
+func (m *Manager) spawn(cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
 	id := newID()
 
 	cmd := exec.Command("claude", extraArgs...)
 	cmd.Dir = cwd
-	cmd.Env = m.buildEnv(id)
+	cmd.Env = m.buildEnv(id, excludeEnv...)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -473,7 +521,15 @@ func newRingBuffer(max int) *ringBuffer { return &ringBuffer{max: max} }
 func (r *ringBuffer) Write(p []byte) {
 	r.buf = append(r.buf, p...)
 	if len(r.buf) > r.max {
-		r.buf = r.buf[len(r.buf)-r.max:]
+		cut := len(r.buf) - r.max
+		// Never start the kept window mid escape-sequence or mid UTF-8 rune — a
+		// replay beginning there garbles everything after it. Advance the cut to
+		// just past the next newline so replay starts on a clean line (bounded,
+		// in case a pathological chunk has no newline at all).
+		if i := bytes.IndexByte(r.buf[cut:min(cut+4096, len(r.buf))], '\n'); i >= 0 {
+			cut += i + 1
+		}
+		r.buf = r.buf[cut:]
 	}
 }
 
