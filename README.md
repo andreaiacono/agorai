@@ -2,19 +2,36 @@
 
 A tiny local dashboard for juggling several **Claude Code** sessions at once.
 
-- **Left panel** — every session with its state and a one-line recap. A session
-  **blinks** when it's waiting for your input or asking permission.
-- **Right panel** — the focused session's live terminal (xterm.js).
-- **+ New session** — pick a repo (discovered under your roots) and launch
-  `claude` there, optionally in an isolated **git worktree** — or **start
-  without a repo** (runs in a dedicated `~/.agorai/scratch` workspace). Choose the cloud
-  **model** (Opus / Sonnet / Haiku, or your default) from the picker; the chosen
-  model shows as a chip beside the session and is remembered across restarts.
+- **Left panel** — every session with its state and a one-line recap. The dot +
+  name are colour-coded so you can triage at a glance, and **blink** until you
+  look:
+  - 🔴 **red** — a permission prompt is waiting for your answer
+  - 🟢 **green** — it finished its turn / wants input and you haven't checked it yet
+  - 🟡 **amber** (steady) — busy working, no action needed
+  - ⚪ **grey** — idle and seen, or ended
+- **Right panel** — the focused session's live terminal (xterm.js). Clicking a
+  session focuses the terminal so you can start typing immediately.
+- **+ New Session** — pick a repo (discovered under your roots), create a **new
+  directory** for it, or **start without a repo** (runs in a dedicated
+  `~/.agorai/scratch` workspace).
+- **New PR** — give it a Linear ticket (a bare number is prefixed with `BLUE-`);
+  Claude checks out the ticket's PR under `~/dev/PRs/<ticket>` and produces an
+  implementation plan.
+- **Review PR** — review a PR by Linear ticket or by GitHub PR reference. Runs
+  read-only (no checkout/commits/comments) in a contained workspace.
 - **Resume** — re-open a past session (discovered from `~/.claude/projects`
   transcripts) as a hosted, interactive terminal via `claude --resume`. The
   picker lists each session's first prompt, last reply, and age.
+- **Model picker** — choose the cloud **model** (Opus / Sonnet / Haiku, or your
+  default) and optionally pin a **version**; the model actually running (resolved
+  from the transcript, even behind "default") shows as a chip beside the session
+  and is remembered across restarts.
 - **Yes / No / Always** buttons answer a permission prompt without switching to
-  that session.
+  that session; an **ⓘ** icon carries the full command/context as a tooltip.
+- **🔊** (top-right) toggles alert sounds — a tone when a session needs
+  permission, another when one finishes while you're looking elsewhere.
+- **🐞** (terminal header) shows what the permission-prompt parser sees, for
+  debugging a mis-parsed prompt (with a Copy-JSON button).
 - **Settings** (⚙ top-right) — set the terminal **scrollback** lines and define
   **environment variables** passed to `claude` at launch (e.g. a `DATABASE_URL`).
   Saved to `~/.agorai/config.json` (mode `0600`, since env may hold secrets).
@@ -31,7 +48,9 @@ make tidy      # first time: resolve deps (needs network; writes go.sum)
 make run       # starts on http://127.0.0.1:7777
 ```
 
-Then open <http://127.0.0.1:7777>. Point it at different repo roots with:
+Then open <http://127.0.0.1:7777>. By default the New-Session picker lists a few
+specific repos (see `defaultRoots` in `main.go`). Point it at different roots —
+a root may be a repo itself or a tree to scan (up to 3 levels deep) for repos:
 
 ```
 go run . -roots ~/dev,~/work,~/src
@@ -114,9 +133,11 @@ hooks configured as above.
 
 ## Notes / rough edges
 
-- **Permission keystrokes** (`server.go`, `answerKeys`) are best-effort for the
-  current Claude prompt (a numbered select: `1` Yes / `2` Always / `3` No).
-  Verify against your version and adjust if the prompt UI changes.
+- **Permission prompts** are parsed from the terminal (`prompt.go`,
+  `parsePermissionPrompt`): the real numbered options become the panel buttons,
+  and answering sends `<n>\r` to claude's numbered select. Parsing is heuristic
+  and best-effort — if the prompt UI changes, use the **🐞** debug view to see
+  what it parsed and adjust.
 - **Recaps** show the last assistant line of the chat, read from the transcript
   (`transcript_path`) on each hook event (only the tail is read, so it stays
   cheap on long sessions). They fall back to a status label when the transcript
@@ -127,8 +148,10 @@ hooks configured as above.
   xterm instance is kept per session to preserve scrollback when switching; if
   you run many sessions, drop background terminals and replay from the
   server-side ring buffer instead.
-- **Security** — binds to `127.0.0.1` only and validates that a session's `cwd`
-  is under an allowed root. Don't expose the port without adding auth.
+- **Security** — binds to `127.0.0.1` only and validates that a client-supplied
+  `cwd` is under an allowed root (Review / New-PR / scratch sessions instead run
+  in fixed server-chosen workspaces under `~/.agorai` or `~/dev/PRs`). Don't
+  expose the port without adding auth.
 - **Offline / vendoring** — `index.html` loads xterm.js from a CDN. For a truly
   offline single-binary build, download `xterm.min.js`, `xterm.min.css`,
   `addon-fit.min.js`, and `addon-search.min.js` into `web/` and point the tags at
