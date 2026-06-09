@@ -611,13 +611,28 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		sess.writeInput(data)
-		// Typing into a prompting/waiting session is the user answering it in the
-		// terminal — clear the stale state so the panel updates.
-		if st := sess.currentState(); st == StatePerm || st == StateWaiting {
+		// Keep the panel state in sync with terminal input that claude won't
+		// report via a hook:
+		//  - typing into a prompting/waiting session = answering it → working
+		//  - a lone Esc into a working session = interrupting the turn → idle
+		//    (claude fires no Stop hook on interrupt, so we'd stay stuck "working")
+		switch st := sess.currentState(); {
+		case st == StatePerm || st == StateWaiting:
 			sess.setState(StateWorking, "Working…")
+			s.broadcastSessions()
+		case st == StateWorking && isEscInterrupt(data):
+			sess.setState(StateIdle, "Interrupted — waiting for next instruction")
 			s.broadcastSessions()
 		}
 	}
+}
+
+// isEscInterrupt reports whether a PTY input frame is a bare Escape key — what
+// claude treats as "interrupt the current turn". A lone 0x1b is the Esc key;
+// arrow/function keys send multi-byte sequences that also start with 0x1b, so
+// we require the frame to be exactly one ESC byte to avoid false positives.
+func isEscInterrupt(data []byte) bool {
+	return len(data) == 1 && data[0] == 0x1b
 }
 
 // ---- control WebSocket (shared: state out, commands in) ----
