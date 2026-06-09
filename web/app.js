@@ -184,10 +184,28 @@ function mountTerminal(id) {
   if (SearchAddon) {
     search = new SearchAddon();
     term.loadAddon(search);
-    // don't let Ctrl+F reach the PTY — it opens our find bar instead
-    term.attachCustomKeyEventHandler((e) =>
-      !(e.type === "keydown" && (e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")));
   }
+
+  // Intercept a few key combos before xterm sends them to the PTY:
+  //  - Ctrl/Cmd+F      → our find bar (handled at window level), don't reach PTY
+  //  - Ctrl/Cmd+C      → copy the selection (swapped: no longer sends ^C)
+  //  - Ctrl/Cmd+Shift+C → send the interrupt signal (^C / 0x03) to claude
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown") return true;
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return true;
+    if (search && (e.key === "f" || e.key === "F")) return false;
+    if (e.key === "c" || e.key === "C") {
+      if (e.shiftKey) {
+        if (ws.readyState === 1) ws.send(enc.encode("\x03")); // interrupt
+      } else {
+        const sel = term.getSelection();
+        if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+      }
+      return false; // we handled it; xterm must not also send anything
+    }
+    return true;
+  });
 
   term.open(pane);
   fit.fit();
@@ -420,7 +438,6 @@ async function setMode(m) {
   document.getElementById("search").placeholder = m === "resume" ? "Filter past sessions…" : "Filter repos…";
 
   if (m === "review") {
-    document.getElementById("review-ticket").value = "";
     document.querySelector('input[name="review-source"][value="ticket"]').checked = true;
     setReviewSource("ticket");
   }
@@ -446,11 +463,16 @@ function setReviewSource(src) {
     label.textContent = "GitHub PR";
     input.placeholder = "PR URL or owner/repo#123";
     hint.textContent = "The PR is reviewed directly via `gh` — no Linear ticket needed.";
+    input.value = "";
   } else {
     label.textContent = "Linear ticket";
     input.placeholder = "e.g. BLUE-900";
     hint.textContent = "The repository is taken from the PR in the ticket — no directory needed.";
+    // Pre-fill the usual project prefix so you only type the number.
+    input.value = "BLUE-";
   }
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length); // cursor at end
 }
 
 function launchTicket() {
