@@ -6,7 +6,8 @@ A tiny local dashboard for juggling several **Claude Code** sessions at once.
   **blinks** when it's waiting for your input or asking permission.
 - **Right panel** — the focused session's live terminal (xterm.js).
 - **+ New session** — pick a repo (discovered under your roots) and launch
-  `claude` there, optionally in an isolated **git worktree**. Choose the cloud
+  `claude` there, optionally in an isolated **git worktree** — or **start
+  without a repo** (runs in a dedicated `~/.agorai/scratch` workspace). Choose the cloud
   **model** (Opus / Sonnet / Haiku, or your default) from the picker; the chosen
   model shows as a chip beside the session and is remembered across restarts.
 - **Resume** — re-open a past session (discovered from `~/.claude/projects`
