@@ -68,9 +68,13 @@ func hooksInstalled() bool {
 
 func defaultRoots() string {
 	home, _ := os.UserHomeDir()
+	// Point directly at the repos to offer: a root that itself contains .git is
+	// listed as that single repo (walkRepos stops there), so only these show.
+	// Override with -roots to scan whole trees instead.
 	return strings.Join([]string{
-		filepath.Join(home, "dev"),
-		filepath.Join(home, "work"),
+		filepath.Join(home, "dev", "light"),
+		filepath.Join(home, "dev", "axolotl"),
+		filepath.Join(home, "dev", "terraform"),
 	}, ",")
 }
 
