@@ -76,9 +76,9 @@ function sessionCard(s) {
     + (state.unread.has(s.id) ? " unread" : "");
   el.onclick = () => selectSession(s.id);
 
-  // Only permission gets a badge (it pairs with the answer buttons). The amber
-  // dot/name already signals "wants you" for waiting/finished sessions.
-  const badge = s.state === "perm" ? `<span class="badge perm">permission</span>` : "";
+  // A "question" badge (it pairs with the answer buttons). The prompt may be a
+  // permission request or a "how should I do this?" question — both surface here.
+  const badge = s.state === "perm" ? `<span class="badge perm">question</span>` : "";
 
   // While working, show an animated "Working" with oscillating dots (1→2→3→2…).
   const recap = s.state === "working" ? `Working<span class="dots"></span>` : esc(s.recap);
