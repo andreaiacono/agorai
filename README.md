@@ -1,6 +1,7 @@
 # agorai
 
-A tiny local dashboard for juggling several **Claude Code** sessions at once.
+A tiny local dashboard for juggling several **Claude Code** (and **OpenAI Codex**)
+sessions at once.
 
 - **Left panel** — every session with its state and a one-line recap. The dot +
   name are colour-coded so you can triage at a glance, and **blink** until you
@@ -11,9 +12,10 @@ A tiny local dashboard for juggling several **Claude Code** sessions at once.
   - ⚪ **grey** — idle and seen, or ended
 - **Right panel** — the focused session's live terminal (xterm.js). Clicking a
   session focuses the terminal so you can start typing immediately.
-- **+ New Session** — pick a repo (discovered under your roots), create a **new
-  directory** for it, or **start without a repo** (runs in a dedicated
-  `~/.agorai/scratch` workspace).
+- **+ New Session** — pick the **agent** (Claude or Codex), then pick a repo
+  (discovered under your roots), create a **new directory** for it, or **start
+  without a repo** (runs in a dedicated `~/.agorai/scratch` workspace). A `codex`
+  chip marks Codex sessions in the list.
 - **New PR** — give it a Linear ticket (a bare number is prefixed with `BLUE-`);
   Claude checks out the ticket's PR under `~/dev/PRs/<ticket>` and produces an
   implementation plan.
@@ -36,10 +38,28 @@ A tiny local dashboard for juggling several **Claude Code** sessions at once.
   **environment variables** passed to `claude` at launch (e.g. a `DATABASE_URL`).
   Saved to `~/.agorai/config.json` (mode `0600`, since env may hold secrets).
 
-It's a single Go binary: one process hosts each `claude` in a PTY, bridges it to
-the browser over a WebSocket, and listens for Claude Code hook events to know
-when a session needs you. The web assets are embedded, so it cross-compiles to a
-single file you can hand to a colleague.
+It's a single Go binary: one process hosts each `claude` (or `codex`) in a PTY,
+bridges it to the browser over a WebSocket, and learns when a session needs you.
+The web assets are embedded, so it cross-compiles to a single file you can hand
+to a colleague.
+
+## Codex sessions
+
+Pick **Codex** in the New-Session agent dropdown to host an OpenAI `codex` TUI
+instead of `claude`. A few differences, handled automatically:
+
+- **No hooks.** Codex has no hook system, so agorai instead tails Codex's
+  session **rollout** file (`~/.codex/sessions/.../rollout-*.jsonl`) to know the
+  state: a started turn → *working*, a finished turn → *idle*, and a command
+  awaiting your approval (a `require_escalated` call) → the red *question* state
+  (answer it in the terminal — there are no panel buttons for Codex).
+- **Session ids** are minted by Codex, not agorai, so the id is learned from the
+  rollout right after spawn; persistence + auto-resume (`codex resume <id>`) work
+  the same as for Claude.
+- **Folder trust.** agorai appends a trusted `[projects."<dir>"]` entry to
+  `~/.codex/config.toml` for the session's directory (idempotent, append-only),
+  so Codex doesn't prompt.
+- Codex runs with `--no-alt-screen` so its scrollback survives agorai's replay.
 
 ## Run
 
