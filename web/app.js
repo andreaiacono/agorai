@@ -79,6 +79,8 @@ function sessionCard(s) {
   // A "question" badge (it pairs with the answer buttons). The prompt may be a
   // permission request or a "how should I do this?" question — both surface here.
   const badge = s.state === "perm" ? `<span class="badge perm">question</span>` : "";
+  // A small chip marks non-claude agents so you can tell sessions apart.
+  const agentChip = s.agent === "codex" ? `<span class="agent-chip">codex</span>` : "";
 
   // While working, show an animated "Working" with oscillating dots (1→2→3→2…).
   const recap = s.state === "working" ? `Working<span class="dots"></span>` : esc(s.recap);
@@ -87,6 +89,7 @@ function sessionCard(s) {
     <div class="row1">
       <span class="dot ${s.state}"></span>
       <span class="name" title="${esc(s.name)}">${esc(s.name)} <span class="branch">· ${esc(s.branch)}</span></span>
+      ${agentChip}
       ${badge}
       <span class="x" title="close session">✕</span>
     </div>
@@ -405,7 +408,6 @@ async function openModal(initialMode = "open") {
   overlay.classList.add("open");
   document.getElementById("search").value = "";
   resumables = []; // refetched when the Resume tab is opened
-  await populateModels();
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []);
   roots = await fetch("/api/roots").then((r) => r.json()).catch(() => []);
   document.getElementById("newdir-parent").innerHTML =
@@ -431,6 +433,10 @@ async function setMode(m) {
   modal.classList.toggle("resume-mode", m === "resume");
   modal.classList.toggle("review-mode", m === "review");
   modal.classList.toggle("ticket-mode", m === "ticket");
+  // The agent choice only applies to the open flow; everything else is claude.
+  // Force it so the model list matches the agent that will actually run.
+  if (m !== "open") document.getElementById("agent-sel").value = "claude";
+  await populateModels();
   // reset the new-directory sub-state whenever the mode changes
   modal.classList.remove("newdir-mode");
   document.getElementById("newdir-chk").checked = false;
@@ -497,7 +503,7 @@ function launchReview() {
 }
 
 function launchScratch() {
-  createSession({ mode: "scratch", model: selectedModel() });
+  createSession({ mode: "scratch", model: selectedModel(), agent: selectedAgent() });
 }
 
 function toggleNewDir() {
@@ -512,7 +518,7 @@ function launchNewDir() {
   const gitInit = document.getElementById("newdir-git").checked;
   if (!parent) { alert("Choose a parent folder."); return; }
   if (!dir) { alert("Enter a folder name."); return; }
-  createSession({ mode: "newdir", parent, dir, gitInit, model: selectedModel() });
+  createSession({ mode: "newdir", parent, dir, gitInit, model: selectedModel(), agent: selectedAgent() });
 }
 
 function renderList() {
@@ -559,15 +565,20 @@ function renderList() {
   }
 }
 
-let modelsLoaded = false;
 let modelList = [];
+function selectedAgent() {
+  return document.getElementById("agent-sel").value || "claude";
+}
 async function populateModels() {
-  if (modelsLoaded) return;
-  modelList = await fetch("/api/models").then((r) => r.json()).catch(() => []);
+  // Models are per-agent, so (re)fetch for the currently selected agent.
+  modelList = await fetch("/api/models?agent=" + encodeURIComponent(selectedAgent()))
+    .then((r) => r.json()).catch(() => []);
   document.getElementById("model-sel").innerHTML =
     modelList.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
-  modelsLoaded = true;
   onModelChange();
+}
+async function onAgentChange() {
+  await populateModels(); // swap the model list to match the chosen agent
 }
 function onModelChange() {
   const family = document.getElementById("model-sel").value;
@@ -584,7 +595,7 @@ function selectedModel() {
 }
 
 function launchRepo(r) {
-  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel() });
+  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent() });
 }
 function launchResume(r) {
   const fork = document.getElementById("fork-chk").checked;

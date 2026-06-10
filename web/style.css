@@ -118,6 +118,7 @@ body {
 
 .badge { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; padding: 1px 6px; border-radius: 10px; flex: none; }
 .badge.perm  { background: rgba(240,80,110,.15); color: var(--red); }
+.agent-chip { flex: none; font-size: 9px; text-transform: uppercase; letter-spacing: .5px; padding: 1px 5px; border-radius: 4px; background: rgba(74,163,255,.13); color: var(--accent); border: 1px solid rgba(74,163,255,.3); }
 
 /* Name colour matches the dot bucket. */
 .session.working .name { color: var(--yellow); }
@@ -189,8 +190,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .modal h2 { margin-bottom: 6px; }
 .search { margin: 0 16px 8px; width: calc(100% - 32px); font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; }
 .search:focus { outline: none; border-color: var(--accent); }
-.model-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; color: var(--dim); font-size: 11px; }
-.model-row select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; }
+.model-row, .agent-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; color: var(--dim); font-size: 11px; }
+.model-row select, .agent-row select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; }
+/* the agent choice only applies to the open / new-dir / scratch flows */
+.modal.wt-mode .agent-row, .modal.resume-mode .agent-row, .modal.review-mode .agent-row, .modal.ticket-mode .agent-row { display: none; }
 .model-row select:focus { outline: none; border-color: var(--accent); }
 .model-row select:disabled { opacity: 0.45; cursor: not-allowed; }
 .wt-note, .resume-note { display: none; margin: 0 16px 12px; padding: 8px 10px; background: rgba(74,163,255,.08); border: 1px solid rgba(74,163,255,.25); border-radius: 6px; color: var(--dim); font-size: 11px; }

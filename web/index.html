@@ -71,6 +71,7 @@
     <div class="modal" id="modal">
       <h2 id="modal-title">New <span>session</span></h2>
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
+      <div class="agent-row"><span>Agent</span><select id="agent-sel" onchange="onAgentChange()"><option value="claude">Claude</option><option value="codex">Codex</option></select></div>
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
       <label class="newdir-toggle"><input type="checkbox" id="newdir-chk" onchange="toggleNewDir()"> Create a new directory for this session</label>
       <div class="scratch-row"><button type="button" class="scratch-btn" onclick="launchScratch()">▷ Start without a repo <small>· runs in ~/.agorai/scratch</small></button></div>
