@@ -457,6 +457,19 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 		return // a session started outside agorai, or unknown id
 	}
 
+	// Background subagents inherit the main process's AGORAI_ID, so their hook
+	// events bind to this same session. An event that would dismiss the prompt
+	// (a turn finishing, going idle, a new prompt submitted) must not clear an
+	// unanswered permission prompt that's still on the terminal — only a real
+	// answer (panel button or typing) should. A fresh permission_prompt is
+	// exempt: it replaces the prompt on screen and must refresh the options.
+	dismissesPrompt := p.HookEventName == "UserPromptSubmit" || p.HookEventName == "Stop" ||
+		(p.HookEventName == "Notification" &&
+			(p.NotificationType == "idle_prompt" || p.NotificationType == "elicitation_dialog"))
+	if dismissesPrompt && s.promptStillOnScreen(sess) {
+		return // leave the prompt (and its recap) untouched
+	}
+
 	// The recap is the last assistant line of the chat. Fall back to a status
 	// label only when the transcript has nothing to show yet. The transcript
 	// also reveals the real model id (what "default" resolves to).
@@ -500,6 +513,18 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 		sess.setRecap(recap) // unknown event: refresh recap, leave state alone
 	}
 	s.broadcastSessions()
+}
+
+// promptStillOnScreen reports whether the session is showing an unanswered
+// permission prompt — it's in the perm state and the prompt's options are still
+// parseable on the terminal. Used to ignore background-agent hook events that
+// would otherwise dismiss a prompt the user hasn't answered yet.
+func (s *Server) promptStillOnScreen(sess *Session) bool {
+	if sess.currentState() != StatePerm {
+		return false
+	}
+	_, _, opts := parsePermissionPrompt(sess.recentBytes(16 * 1024))
+	return len(opts) > 0
 }
 
 // parsePromptSoon reads the session's recent output and extracts the prompt's
