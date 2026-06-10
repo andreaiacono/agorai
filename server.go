@@ -57,7 +57,28 @@ func (s *Server) routes() http.Handler {
 // ---- REST ----
 
 func (s *Server) handleRepos(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, discoverRepos(s.roots, 3))
+	repos := discoverRepos(s.roots, 3)
+	// Offer the home directory as the first choice so a session can be started
+	// there directly (it isn't under the configured repo roots otherwise).
+	if home := homeDir(); home != "" {
+		repos = append([]Repo{{
+			Name:    "home",
+			Path:    home,
+			Display: "~",
+			Branch:  gitOut(home, "rev-parse", "--abbrev-ref", "HEAD"),
+			Sub:     "start claude in your home directory",
+		}}, repos...)
+	}
+	writeJSON(w, repos)
+}
+
+// homeDir is the user's home directory, or "" if it can't be determined.
+func homeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
@@ -141,15 +162,19 @@ type createReq struct {
 	GitInit   bool   `json:"gitInit"`   // for "newdir": run `git init`
 }
 
+// reviewCommentsSuffix is appended to both review prompts: after the analysis,
+// produce a copy/paste-friendly list of short comments to post on the PR.
+const reviewCommentsSuffix = " Then, at the very end, add a section titled \"Proposed comments\" — a copy/paste-friendly list of the comments you'd post on the PR. Put each comment on its own line, prefixed with its `file:line`. Keep every comment very short and simple, with no surrounding quotes and no line breaks within a comment."
+
 // reviewPromptTemplate is the initial prompt for a ticket-based review session;
 // $TICKET is replaced with the user-supplied Linear ticket and passed to claude
 // as its first message.
-const reviewPromptTemplate = "Please spawn the reviewers for the PR contained in the linear ticket $TICKET, using the ticket description as a base for analysing the PR content. The repository to review is the one the PR belongs to — determine it from the ticket/PR, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read."
+const reviewPromptTemplate = "Please spawn the reviewers for the PR contained in the linear ticket $TICKET, using the ticket description as a base for analysing the PR content. The repository to review is the one the PR belongs to — determine it from the ticket/PR, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
 
 // reviewPrPromptTemplate is the initial prompt for a review of a GitHub PR that
 // is detached from any Linear ticket; $PR is replaced with the user-supplied PR
 // reference (a URL or `owner/repo#123`).
-const reviewPrPromptTemplate = "Please spawn the reviewers for the GitHub PR $PR. The repository to review is the one the PR belongs to — determine it from the PR reference, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read."
+const reviewPrPromptTemplate = "Please spawn the reviewers for the GitHub PR $PR. The repository to review is the one the PR belongs to — determine it from the PR reference, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
 
 // ticketPlanPromptTemplate is the initial prompt for a "session for ticket":
 // Claude finds the ticket's PR, checks it out under the PRs workspace, and
@@ -371,7 +396,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !underRoots(req.Cwd, s.roots) {
+	// The home directory is an explicit, always-offered choice; allow it through
+	// even though it isn't under the configured repo roots.
+	if filepath.Clean(req.Cwd) != homeDir() && !underRoots(req.Cwd, s.roots) {
 		http.Error(w, "cwd not under an allowed root", http.StatusForbidden)
 		return
 	}
@@ -455,6 +482,15 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	sess := s.mgr.bind(launchID, p.SessionID)
 	if sess == nil {
 		return // a session started outside agorai, or unknown id
+	}
+
+	// A hook whose session_id isn't this session's own claude id comes from a
+	// background/subagent process that merely inherited our AGORAI_ID (subagents,
+	// or a `claude` spawned inside the session). Such events must not drive — or
+	// be reflected in — the main row, or a finishing background job leaves the
+	// session stuck on "working".
+	if sess.ClaudeID != "" && p.SessionID != "" && p.SessionID != sess.ClaudeID {
+		return
 	}
 
 	// Background subagents inherit the main process's AGORAI_ID, so their hook

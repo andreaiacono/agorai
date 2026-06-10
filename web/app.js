@@ -547,11 +547,12 @@ function renderList() {
     const el = document.createElement("div");
     el.className = "repo";
     el.onclick = () => launchRepo(r);
+    const branch = r.branch ? `<span class="r-branch">${esc(r.branch)}</span> · ` : "";
     el.innerHTML = `
       <span class="ico">▸</span>
       <span class="info">
         <div class="r-name">${esc(r.name)}</div>
-        <div class="r-sub">${esc(r.display)} · <span class="r-branch">${esc(r.branch)}</span> · ${esc(r.sub)}</div>
+        <div class="r-sub">${esc(r.display)} · ${branch}${esc(r.sub)}</div>
       </span>
       <span class="go">↵</span>`;
     list.appendChild(el);
