@@ -81,8 +81,8 @@ func homeDir() string {
 	return home
 }
 
-func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, models)
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, agentFor(AgentKind(r.URL.Query().Get("agent"))).Models())
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
@@ -149,17 +149,18 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createReq struct {
-	Cwd       string `json:"cwd"`
-	Mode      string `json:"mode"` // "open" | "worktree" | "resume" | "review" | "newdir" | "scratch" | "ticket"
-	Name      string `json:"name"`
-	SessionID string `json:"sessionId"` // for "resume"
-	Fork      bool   `json:"fork"`      // resume: branch a copy (for still-running sessions)
-	Model     string `json:"model"`     // "" | "opus" | "sonnet" | "haiku"
-	Ticket    string `json:"ticket"`    // for "review": the Linear ticket number
-	Pr        string `json:"pr"`        // for "review": a GitHub PR (URL or owner/repo#123), detached from a ticket
-	Parent    string `json:"parent"`    // for "newdir": the parent root dir
-	Dir       string `json:"dir"`       // for "newdir": the new folder name
-	GitInit   bool   `json:"gitInit"`   // for "newdir": run `git init`
+	Cwd       string    `json:"cwd"`
+	Mode      string    `json:"mode"` // "open" | "worktree" | "resume" | "review" | "newdir" | "scratch" | "ticket"
+	Name      string    `json:"name"`
+	SessionID string    `json:"sessionId"` // for "resume"
+	Fork      bool      `json:"fork"`      // resume: branch a copy (for still-running sessions)
+	Model     string    `json:"model"`     // "" | "opus" | "sonnet" | "haiku"
+	Ticket    string    `json:"ticket"`    // for "review": the Linear ticket number
+	Pr        string    `json:"pr"`        // for "review": a GitHub PR (URL or owner/repo#123), detached from a ticket
+	Parent    string    `json:"parent"`    // for "newdir": the parent root dir
+	Dir       string    `json:"dir"`       // for "newdir": the new folder name
+	GitInit   bool      `json:"gitInit"`   // for "newdir": run `git init`
+	Agent     AgentKind `json:"agent"`     // "" | "claude" | "codex" (open mode)
 }
 
 // reviewCommentsSuffix is appended to both review prompts: after the analysis,
@@ -218,6 +219,35 @@ func appWorkspace(name string) string {
 		return home
 	}
 	return dir
+}
+
+// startSession spawns a plain interactive session for the chosen agent and
+// writes the {id} response. It handles the two id models: claude takes the id we
+// assign (--session-id → adopt now); codex mints its own (learn it after spawn).
+// Used by the open / newdir / scratch flows; review and ticket build their own
+// claude-specific args.
+func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model string) {
+	agent = normalizeAgent(agent)
+	a := agentFor(agent)
+	if agent == AgentCodex {
+		ensureCodexTrust(cwd) // pre-trust the dir so codex doesn't prompt
+	}
+	sid := newUUID() // used only when the agent accepts an assigned id (claude)
+	args := a.FreshArgs(sid, model, "")
+	sess, err := s.mgr.SpawnAs(agent, cwd, name, branch, args...)
+	if err != nil {
+		http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sess.setModel(model)
+	if a.AssignsID() {
+		s.mgr.adopt(sess, sid)
+	} else {
+		// Codex assigns its own id and reports state via its rollout file, not
+		// hooks — supervise it to learn the id and drive the panel state.
+		go s.superviseCodex(sess, cwd, time.Now())
+	}
+	writeJSON(w, map[string]string{"id": sess.ID})
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -341,16 +371,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// Scratch: a free session not tied to any repo/directory — runs in a
 	// dedicated workspace under ~/.agorai so nothing needs to be picked.
 	if req.Mode == "scratch" {
-		sid := newUUID()
-		args := append([]string{"--session-id", sid}, modelArgs(model)...)
-		sess, err := s.mgr.Spawn(scratchWorkspace(), "Scratch", "", args...)
-		if err != nil {
-			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		sess.setModel(model)
-		s.mgr.adopt(sess, sid)
-		writeJSON(w, map[string]string{"id": sess.ID})
+		s.startSession(w, req.Agent, scratchWorkspace(), "Scratch", "", model)
 		return
 	}
 
@@ -383,16 +404,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			_ = exec.Command("git", "-C", cwd, "init", "-b", "main").Run()
 		}
 		branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-		sid := newUUID()
-		args := append([]string{"--session-id", sid}, modelArgs(model)...)
-		sess, err := s.mgr.Spawn(cwd, dir, branch, args...)
-		if err != nil {
-			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		sess.setModel(model)
-		s.mgr.adopt(sess, sid)
-		writeJSON(w, map[string]string{"id": sess.ID})
+		s.startSession(w, req.Agent, cwd, dir, branch, model)
 		return
 	}
 
@@ -419,18 +431,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		cwd, branch, name = wtPath, wtBranch, name+" · worktree"
 	}
 
-	// Assign the session id ourselves so we can persist it now (and --resume it
-	// later) without depending on a hook to tell us what id claude chose.
-	sid := newUUID()
-	args := append([]string{"--session-id", sid}, modelArgs(model)...)
-	sess, err := s.mgr.Spawn(cwd, name, branch, args...)
-	if err != nil {
-		http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	sess.setModel(model)
-	s.mgr.adopt(sess, sid)
-	writeJSON(w, map[string]string{"id": sess.ID})
+	s.startSession(w, req.Agent, cwd, name, branch, model)
 }
 
 // addWorktree creates a fresh worktree + branch beside the repo so parallel
@@ -549,6 +550,74 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 		sess.setRecap(recap) // unknown event: refresh recap, leave state alone
 	}
 	s.broadcastSessions()
+}
+
+// startCodexTailers supervises every restored codex session (called once at
+// startup, after RestoreAll). They already have an id, so it tails immediately.
+func (s *Server) startCodexTailers() {
+	for _, dto := range s.mgr.List() {
+		sess := s.mgr.Get(dto.ID)
+		if sess != nil && sess.agent == AgentCodex {
+			go s.superviseCodex(sess, sess.workdir(), time.Time{})
+		}
+	}
+}
+
+// superviseCodex is the codex equivalent of the claude hook stream: codex has
+// no hooks, so one long-lived goroutine (a) learns the session id once codex
+// writes its rollout — which it does lazily, often only after the first prompt,
+// so we keep trying for the session's whole life rather than giving up — and
+// (b) tails that rollout, mapping task/approval events to the panel state.
+func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
+	if !sess.beginTailing() {
+		return // already supervised
+	}
+	var lastState, lastRecap string
+	for {
+		if s.mgr.Get(sess.ID) == nil || sess.currentState() == StateDone {
+			return
+		}
+
+		id := sess.claudeID()
+		if id == "" {
+			// Codex mints its own id; learn it from the rollout it creates.
+			if learned := newestCodexSessionID(cwd, after, s.mgr.hasClaudeID); learned != "" {
+				s.mgr.adopt(sess, learned)
+				id = learned
+				s.broadcastSessions()
+			}
+		}
+
+		if id != "" {
+			if path := codexTranscriptPath(id); path != "" {
+				state, recap, question, model := codexState(path)
+				if model != "" {
+					sess.setActualModel(model)
+				}
+				shown := recap
+				if state == StatePerm && question != "" {
+					shown = question // surface the approval question as the recap
+				}
+				if state != lastState || shown != lastRecap {
+					sess.setState(state, fallback(shown, codexStatusFor(state)))
+					lastState, lastRecap = state, shown
+					s.broadcastSessions()
+				}
+			}
+		}
+		time.Sleep(600 * time.Millisecond)
+	}
+}
+
+func codexStatusFor(state string) string {
+	switch state {
+	case StateWorking:
+		return "Working…"
+	case StatePerm:
+		return "Needs your approval — open to respond"
+	default:
+		return "Finished — waiting for next instruction"
+	}
 }
 
 // promptStillOnScreen reports whether the session is showing an unanswered

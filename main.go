@@ -47,6 +47,7 @@ func main() {
 	if n := mgr.RestoreAll(); n > 0 {
 		log.Printf("restored %d session(s) from %s", n, store.path)
 	}
+	srv.startCodexTailers() // codex sessions report state via rollout polling, not hooks
 
 	if !hooksInstalled() {
 		log.Printf("WARNING: agorai hook not found in ~/.claude/settings.json — needs-input blink and live recap updates won't work. See README 'Wire up the hooks'. (Persistence works without it.)")

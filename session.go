@@ -26,8 +26,9 @@ const (
 
 // Session is one hosted `claude` process and everything we know about it.
 type Session struct {
-	ID       string // our launch id (passed to claude as AGORAI_ID)
-	ClaudeID string // claude's own session_id, learned from the first hook
+	ID       string    // our launch id (passed to the agent as AGORAI_ID)
+	ClaudeID string    // the agent's own session_id, learned from the first hook
+	agent    AgentKind // which CLI backs this session (set at spawn, immutable)
 
 	mu          sync.Mutex
 	name        string
@@ -41,6 +42,7 @@ type Session struct {
 	promptCtx   string         // parsed context lines above the question (for the tooltip)
 	promptOpts  []PromptOption // parsed options for a permission prompt
 	resumeOf    string         // claude id we resumed from; cleaned up once the live id is known
+	tailing     bool           // a codex rollout-state tailer is running for this session
 	ptmx        *os.File
 	cmd         *exec.Cmd
 	ring        *ringBuffer
@@ -56,6 +58,7 @@ type SessionDTO struct {
 	State  string      `json:"state"`
 	Recap  string      `json:"recap"`
 	Model  string      `json:"model"` // display label, e.g. "Opus" / "default"
+	Agent  string      `json:"agent"` // which CLI backs it: "claude" | "codex"
 	Prompt *PromptInfo `json:"prompt,omitempty"`
 }
 
@@ -68,13 +71,14 @@ func (s *Session) dto() SessionDTO {
 	}
 	// Prefer the model actually seen in the transcript: it shows the real
 	// version behind a "default" or alias choice (e.g. "Opus 4.8", not "default").
-	model := modelLabel(s.model)
+	a := agentFor(s.agent)
+	model := a.ModelLabel(s.model)
 	if s.actualModel != "" {
-		model = prettyModelID(s.actualModel)
+		model = a.PrettyModelID(s.actualModel)
 	}
 	return SessionDTO{
 		ID: s.ID, Name: s.name, Cwd: s.cwd, Branch: s.branch,
-		State: s.state, Recap: s.recap, Model: model, Prompt: prompt,
+		State: s.state, Recap: s.recap, Model: model, Agent: string(normalizeAgent(s.agent)), Prompt: prompt,
 	}
 }
 
@@ -101,6 +105,32 @@ func (s *Session) setActualModel(id string) {
 	s.mu.Lock()
 	s.actualModel = id
 	s.mu.Unlock()
+}
+
+// claudeID returns the agent's learned session id (race-free).
+func (s *Session) claudeID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ClaudeID
+}
+
+// workdir returns the session's working directory.
+func (s *Session) workdir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cwd
+}
+
+// beginTailing claims the codex state-tailer slot, returning false if a tailer
+// is already running for this session (so it isn't started twice).
+func (s *Session) beginTailing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tailing {
+		return false
+	}
+	s.tailing = true
+	return true
 }
 
 func (s *Session) setModel(id string) {
@@ -285,22 +315,41 @@ func (m *Manager) buildEnv(launchID string, exclude ...string) []string {
 	return out
 }
 
-// Spawn starts a new `claude` process in cwd and begins streaming its output.
+// Spawn starts a new claude process in cwd and begins streaming its output.
 // extraArgs are passed to the claude CLI (e.g. "--resume", "<id>").
 func (m *Manager) Spawn(cwd, name, branch string, extraArgs ...string) (*Session, error) {
-	return m.spawn(cwd, name, branch, nil, extraArgs...)
+	return m.spawn(AgentClaude, cwd, name, branch, nil, extraArgs...)
 }
 
 // SpawnWithoutEnv is like Spawn but drops the given env vars (e.g. review
 // sessions run without DATABASE_URL so they can't query the DB).
 func (m *Manager) SpawnWithoutEnv(cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
-	return m.spawn(cwd, name, branch, excludeEnv, extraArgs...)
+	return m.spawn(AgentClaude, cwd, name, branch, excludeEnv, extraArgs...)
 }
 
-func (m *Manager) spawn(cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
+// SpawnAs starts a session backed by the given agent (claude or codex).
+func (m *Manager) SpawnAs(agent AgentKind, cwd, name, branch string, extraArgs ...string) (*Session, error) {
+	return m.spawn(agent, cwd, name, branch, nil, extraArgs...)
+}
+
+// hasClaudeID reports whether a live session already owns this agent session id
+// — used so the codex id-learner doesn't claim a rollout another session took.
+func (m *Manager) hasClaudeID(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		if s.ClaudeID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) spawn(agent AgentKind, cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
+	agent = normalizeAgent(agent)
 	id := newID()
 
-	cmd := exec.Command("claude", extraArgs...)
+	cmd := exec.Command(agentFor(agent).Command(), extraArgs...)
 	cmd.Dir = cwd
 	cmd.Env = m.buildEnv(id, excludeEnv...)
 
@@ -312,6 +361,7 @@ func (m *Manager) spawn(cwd, name, branch string, excludeEnv []string, extraArgs
 
 	s := &Session{
 		ID:      id,
+		agent:   agent,
 		name:    name,
 		cwd:     cwd,
 		branch:  branch,
@@ -353,7 +403,7 @@ func (m *Manager) bind(launchID, claudeID string) *Session {
 
 	if newly && m.store != nil {
 		s.mu.Lock()
-		p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model}
+		p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
 		oldID := s.resumeOf
 		s.mu.Unlock()
 
@@ -404,8 +454,9 @@ func (m *Manager) forget(claudeID string) {
 func (m *Manager) RestoreAll() int {
 	n := 0
 	for _, p := range m.store.all() {
-		args := append([]string{"--resume", p.ClaudeID}, modelArgs(p.Model)...)
-		s, err := m.Spawn(p.Cwd, p.Name, p.Branch, args...)
+		a := agentFor(p.Agent)
+		args := append(a.ResumeArgs(p.ClaudeID), a.ModelArgs(p.Model)...)
+		s, err := m.spawn(p.Agent, p.Cwd, p.Name, p.Branch, nil, args...)
 		if err != nil {
 			m.store.remove(p.ClaudeID)
 			continue
@@ -414,8 +465,9 @@ func (m *Manager) RestoreAll() int {
 		s.ClaudeID = p.ClaudeID // same id continues; keep it recognized
 		// Seed the recap from the transcript so a restored session shows its last
 		// line immediately (not "Starting…"), even with no hooks installed.
-		if tp := transcriptPathFor(p.ClaudeID); tp != "" {
-			s.setRecap(lastAssistantLine(tp))
+		if tp := a.TranscriptPath(p.ClaudeID); tp != "" {
+			recap, _ := a.LastLine(tp)
+			s.setRecap(recap)
 		}
 		n++
 	}
@@ -463,7 +515,7 @@ func newUUID() string {
 func (m *Manager) adopt(s *Session, claudeID string) {
 	s.mu.Lock()
 	s.ClaudeID = claudeID
-	p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model}
+	p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
 	s.mu.Unlock()
 	if m.store != nil {
 		m.store.upsert(p)
@@ -481,7 +533,7 @@ func (m *Manager) Rename(id, name string) {
 	}
 	s.mu.Lock()
 	s.name = name
-	p := persisted{ClaudeID: s.ClaudeID, Cwd: s.cwd, Name: name, Branch: s.branch, Model: s.model}
+	p := persisted{ClaudeID: s.ClaudeID, Cwd: s.cwd, Name: name, Branch: s.branch, Model: s.model, Agent: s.agent}
 	s.mu.Unlock()
 	if p.ClaudeID != "" && m.store != nil {
 		m.store.upsert(p)

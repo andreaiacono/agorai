@@ -10,11 +10,12 @@ import (
 // persisted is the minimal record needed to bring a session back after a
 // restart: claude's session id (to `--resume`) and where to run it.
 type persisted struct {
-	ClaudeID string `json:"claudeId"`
-	Cwd      string `json:"cwd"`
-	Name     string `json:"name"`
-	Branch   string `json:"branch"`
-	Model    string `json:"model"`
+	ClaudeID string    `json:"claudeId"`
+	Cwd      string    `json:"cwd"`
+	Name     string    `json:"name"`
+	Branch   string    `json:"branch"`
+	Model    string    `json:"model"`
+	Agent    AgentKind `json:"agent,omitempty"` // empty = claude (back-compat)
 }
 
 // Store keeps the set of hosted sessions on disk so they survive a restart.

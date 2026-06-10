@@ -159,13 +159,6 @@ func parseTranscript(path string, mod time.Time) (Resumable, bool) {
 	}, true
 }
 
-// lastAssistantLine returns the last assistant text in a transcript, one line,
-// truncated.
-func lastAssistantLine(path string) string {
-	line, _ := lastAssistantInfo(path)
-	return line
-}
-
 // lastAssistantInfo returns the last assistant text (one line, truncated) and
 // the raw model id of the last assistant message — the latter reveals what
 // model a "default" session actually runs on. It reads only the tail of the
