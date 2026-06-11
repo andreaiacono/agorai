@@ -38,12 +38,15 @@ func (codexAgent) FreshArgs(_, model, prompt string) []string {
 	return args
 }
 
-// PromptArgs: unattended reviews use `-a never` (auto-approve, never ask) — the
-// read-only guarantee comes from the prompt, matching the claude path.
+// PromptArgs: unattended reviews bypass approvals AND the sandbox — `-a never`
+// alone keeps the sandbox on, which blocks `gh`'s network access (the diff
+// fails with "error connecting to api.github.com"). This is codex's equivalent
+// of claude's --dangerously-skip-permissions; the read-only guarantee rests on
+// the prompt, same as the claude path.
 func (codexAgent) PromptArgs(_, model, prompt string, unattended bool) []string {
 	args := []string{"--no-alt-screen"}
 	if unattended {
-		args = append(args, "-a", "never")
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 	}
 	args = append(args, codexAgent{}.ModelArgs(model)...)
 	return append(args, prompt)
