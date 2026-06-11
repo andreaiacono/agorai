@@ -20,6 +20,7 @@
     <div class="newbar" id="newbar"><!-- rendered from /api/buttons --></div>
     <div class="meta" id="meta">—</div>
     <button class="icon-btn" id="sound-btn" onclick="toggleSound()" title="Toggle alert sounds">🔊</button>
+    <button class="icon-btn" id="buttons-btn" onclick="openButtonsManager()" title="Manage launch buttons">▦</button>
     <button class="icon-btn" id="settings-btn" onclick="openSettings()" title="Settings">⚙</button>
   </div>
 
@@ -94,6 +95,21 @@
       <div class="settings-actions">
         <button type="button" onclick="copyDebug()">Copy JSON</button>
         <button type="button" class="primary" onclick="closeDebug()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Buttons manager modal -->
+  <div class="overlay" id="buttons-overlay" onclick="if(event.target===this)closeButtonsManager()">
+    <div class="modal buttons-modal">
+      <h2>Launch <span>buttons</span></h2>
+      <div class="buttons-mgr" id="buttons-mgr"></div>
+      <button class="add-env" type="button" onclick="addManagedButton()">+ Add button</button>
+      <div class="settings-actions">
+        <button type="button" onclick="resetManagedButtons()">Reset to defaults</button>
+        <span style="flex:1"></span>
+        <button type="button" onclick="closeButtonsManager()">Cancel</button>
+        <button type="button" class="primary" onclick="saveManagedButtons()">Save</button>
       </div>
     </div>
   </div>

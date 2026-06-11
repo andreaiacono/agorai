@@ -682,7 +682,7 @@ async function createSession(body) {
   trySelect();
 }
 
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); closeSettings(); closeDebug(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); closeSettings(); closeDebug(); closeButtonsManager(); } });
 
 /* ---------- settings ---------- */
 
@@ -716,6 +716,117 @@ function closeDebug() { document.getElementById("debug-overlay").classList.remov
 
 function copyDebug() {
   if (debugDump) navigator.clipboard.writeText(JSON.stringify(debugDump, null, 2));
+}
+
+/* ---------- launch-buttons manager ---------- */
+
+let managedButtons = [];
+const MGR_AGENTS = ["claude", "codex", "gemini"];
+const MGR_ICONS = ["plus", "ticket", "review", "resume", ""];
+
+async function openButtonsManager() {
+  const btns = await fetch("/api/buttons").then((r) => r.json()).catch(() => []);
+  managedButtons = JSON.parse(JSON.stringify(btns)); // edit a copy
+  renderButtonsMgr();
+  document.getElementById("buttons-overlay").classList.add("open");
+}
+function closeButtonsManager() { document.getElementById("buttons-overlay").classList.remove("open"); }
+
+function blankButton() {
+  return { id: "btn-" + Date.now().toString(36), label: "New button", icon: "plus",
+    agents: [...MGR_AGENTS], showModel: true, workspace: { pick: true }, inputs: [], prompt: "" };
+}
+function addManagedButton() { managedButtons.push(blankButton()); renderButtonsMgr(); }
+function deleteManagedButton(i) { managedButtons.splice(i, 1); renderButtonsMgr(); }
+function moveMB(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= managedButtons.length) return;
+  [managedButtons[i], managedButtons[j]] = [managedButtons[j], managedButtons[i]];
+  renderButtonsMgr();
+}
+
+// field binders (mutate the in-memory copy; saved on Save)
+function updateMB(i, field, value) { managedButtons[i][field] = value; }
+function updateMBBool(i, field, checked) { managedButtons[i][field] = checked; }
+function toggleMBAgent(i, agent, checked) {
+  const cur = new Set((managedButtons[i].agents && managedButtons[i].agents.length) ? managedButtons[i].agents : MGR_AGENTS);
+  checked ? cur.add(agent) : cur.delete(agent);
+  managedButtons[i].agents = MGR_AGENTS.filter((a) => cur.has(a));
+}
+function setMBWorkspace(i) {
+  const card = document.getElementById("mb-" + i);
+  const t = card.querySelector(".mb-ws-type").value, v = card.querySelector(".mb-ws-val").value.trim();
+  const b = managedButtons[i];
+  if (t === "pick") b.workspace = { pick: true };
+  else if (t === "dir") b.workspace = { dir: v };
+  else if (t === "scratch") b.workspace = { scratch: v };
+  else delete b.workspace;
+}
+function addMBInput(i) { (managedButtons[i].inputs = managedButtons[i].inputs || []).push({ id: "", placeholder: "" }); renderButtonsMgr(); }
+function removeMBInput(i, j) { managedButtons[i].inputs.splice(j, 1); renderButtonsMgr(); }
+function updateMBInput(i, j, field, value) { managedButtons[i].inputs[j][field] = value; }
+function updateMBInputBool(i, j, field, checked) { managedButtons[i].inputs[j][field] = checked; }
+
+function renderButtonsMgr() {
+  const wrap = document.getElementById("buttons-mgr");
+  wrap.innerHTML = managedButtons.map((b, i) => {
+    const agents = (b.agents && b.agents.length) ? b.agents : MGR_AGENTS;
+    const ws = b.workspace || {};
+    const wsType = ws.pick ? "pick" : ws.dir ? "dir" : ws.scratch ? "scratch" : "";
+    const wsVal = ws.dir || ws.scratch || "";
+    const inputs = (b.inputs || []).map((inp, j) => `
+      <div class="mb-input">
+        <input placeholder="id" value="${esc(inp.id || "")}" oninput="updateMBInput(${i},${j},'id',this.value)">
+        <input placeholder="placeholder" value="${esc(inp.placeholder || "")}" oninput="updateMBInput(${i},${j},'placeholder',this.value)">
+        <select onchange="updateMBInput(${i},${j},'transform',this.value)"><option value="">no transform</option><option value="blue-prefix" ${inp.transform === "blue-prefix" ? "selected" : ""}>blue-prefix</option></select>
+        <label><input type="checkbox" ${inp.required ? "checked" : ""} onchange="updateMBInputBool(${i},${j},'required',this.checked)"> req</label>
+        <button class="env-x" type="button" onclick="removeMBInput(${i},${j})">✕</button>
+      </div>`).join("");
+    const variantNote = (b.variants && b.variants.length)
+      ? `<div class="mb-note">Has ${b.variants.length} variant(s) — edit those in <code>~/.agorai/buttons.json</code>.</div>` : "";
+    return `<div class="mb-card" id="mb-${i}">
+      <div class="mb-head">
+        <input class="mb-label" value="${esc(b.label || "")}" oninput="updateMB(${i},'label',this.value)" placeholder="Label">
+        <span class="mb-move">
+          <button class="env-x" type="button" onclick="moveMB(${i},-1)">↑</button>
+          <button class="env-x" type="button" onclick="moveMB(${i},1)">↓</button>
+          <button class="env-x" type="button" onclick="deleteManagedButton(${i})" title="delete">✕</button>
+        </span>
+      </div>
+      <div class="mb-row">
+        <label>Icon <select onchange="updateMB(${i},'icon',this.value)">${MGR_ICONS.map((ic) => `<option value="${ic}" ${b.icon === ic ? "selected" : ""}>${ic || "none"}</option>`).join("")}</select></label>
+        <label><input type="checkbox" ${b.showModel !== false ? "checked" : ""} onchange="updateMBBool(${i},'showModel',this.checked)"> model picker</label>
+        <label><input type="checkbox" ${b.unattended ? "checked" : ""} onchange="updateMBBool(${i},'unattended',this.checked)"> unattended</label>
+      </div>
+      <div class="mb-row">Agents: ${MGR_AGENTS.map((a) => `<label><input type="checkbox" ${agents.includes(a) ? "checked" : ""} onchange="toggleMBAgent(${i},'${a}',this.checked)"> ${AGENT_NAMES[a]}</label>`).join(" ")}</div>
+      <div class="mb-row">
+        <label>Workspace <select class="mb-ws-type" onchange="setMBWorkspace(${i})">
+          <option value="pick" ${wsType === "pick" ? "selected" : ""}>repo picker</option>
+          <option value="dir" ${wsType === "dir" ? "selected" : ""}>fixed dir</option>
+          <option value="scratch" ${wsType === "scratch" ? "selected" : ""}>scratch name</option>
+          <option value="" ${wsType === "" ? "selected" : ""}>none</option></select></label>
+        <input class="mb-ws-val" placeholder="~/dev/PRs  or  review" value="${esc(wsVal)}" oninput="setMBWorkspace(${i})">
+      </div>
+      <div class="mb-inputs"><div class="mb-sub">Inputs</div>${inputs}<button class="add-env" type="button" onclick="addMBInput(${i})">+ input</button></div>
+      <label class="mb-field">Prompt <small>placeholders: {input} {workspace} {dir}</small>
+        <textarea class="mb-prompt" oninput="updateMB(${i},'prompt',this.value)" rows="3" placeholder="(optional) initial prompt">${esc(b.prompt || "")}</textarea></label>
+      <label class="mb-field">Session name <input value="${esc(b.sessionName || "")}" oninput="updateMB(${i},'sessionName',this.value)" placeholder="e.g. Ticket {ticket}"></label>
+      ${variantNote}
+    </div>`;
+  }).join("");
+}
+
+async function saveManagedButtons() {
+  const res = await fetch("/api/buttons", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(managedButtons) });
+  if (!res.ok) { alert("Save failed: " + (await res.text())); return; }
+  closeButtonsManager();
+  renderTopBar();
+}
+async function resetManagedButtons() {
+  if (!confirm("Reset to the built-in default buttons? Your ~/.agorai/buttons.json will be removed.")) return;
+  managedButtons = await fetch("/api/buttons", { method: "DELETE" }).then((r) => r.json()).catch(() => []);
+  renderButtonsMgr();
+  renderTopBar();
 }
 
 const settingsOverlay = document.getElementById("settings-overlay");

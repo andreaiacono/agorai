@@ -32,6 +32,8 @@ type Server struct {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/buttons", s.handleButtons)
+	mux.HandleFunc("PUT /api/buttons", s.handlePutButtons)
+	mux.HandleFunc("DELETE /api/buttons", s.handleResetButtons)
 	mux.HandleFunc("GET /api/repos", s.handleRepos)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/models", s.handleModels)

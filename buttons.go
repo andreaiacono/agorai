@@ -91,12 +91,19 @@ func defaultButtons() []Button {
 	}
 }
 
+func buttonsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".agorai", "buttons.json")
+}
+
 // loadButtons returns the user's ~/.agorai/buttons.json if present and valid,
 // otherwise the built-in defaults.
 func loadButtons() []Button {
-	home, err := os.UserHomeDir()
-	if err == nil && home != "" {
-		if b, err := os.ReadFile(filepath.Join(home, ".agorai", "buttons.json")); err == nil {
+	if p := buttonsPath(); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
 			var btns []Button
 			if json.Unmarshal(b, &btns) == nil && len(btns) > 0 {
 				return btns
@@ -106,8 +113,45 @@ func loadButtons() []Button {
 	return defaultButtons()
 }
 
+// saveButtons writes the buttons array to ~/.agorai/buttons.json.
+func saveButtons(btns []Button) error {
+	p := buttonsPath()
+	if p == "" {
+		return os.ErrInvalid
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(btns, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, b, 0o644)
+}
+
 func (s *Server) handleButtons(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, loadButtons())
+}
+
+func (s *Server) handlePutButtons(w http.ResponseWriter, r *http.Request) {
+	var btns []Button
+	if err := json.NewDecoder(r.Body).Decode(&btns); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := saveButtons(btns); err != nil {
+		http.Error(w, "save: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, btns)
+}
+
+// handleResetButtons removes the override file, reverting to the built-in defaults.
+func (s *Server) handleResetButtons(w http.ResponseWriter, _ *http.Request) {
+	if p := buttonsPath(); p != "" {
+		_ = os.Remove(p)
+	}
+	writeJSON(w, defaultButtons())
 }
 
 func findButton(id string) *Button {
