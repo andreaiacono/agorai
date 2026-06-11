@@ -25,13 +25,13 @@ func installHooks() error {
 	if err != nil {
 		return err
 	}
-	if err := mergeAgoraiHooks(filepath.Join(home, ".claude", "settings.json"), scriptPath); err != nil {
+	if err := mergeAgoraiHooks(filepath.Join(home, ".claude", "settings.json"), scriptPath, claudeHookEvents); err != nil {
 		return err
 	}
-	// Gemini CLI uses Claude-compatible hooks; wire them too so its sessions
-	// report state. Only if ~/.gemini exists (gemini is installed/used).
+	// Gemini CLI uses the same hook format with its own event names; wire it too
+	// (only if ~/.gemini exists).
 	if _, err := os.Stat(filepath.Join(home, ".gemini")); err == nil {
-		if err := mergeAgoraiHooks(filepath.Join(home, ".gemini", "settings.json"), scriptPath); err != nil {
+		if err := mergeAgoraiHooks(filepath.Join(home, ".gemini", "settings.json"), scriptPath, geminiHookEvents); err != nil {
 			return err
 		}
 	}
@@ -56,9 +56,30 @@ func writeHookScript(home string) (string, error) {
 	return scriptPath, nil
 }
 
-// mergeAgoraiHooks merges the agorai hook entries into a settings.json, backing
-// up the original. Idempotent.
-func mergeAgoraiHooks(settingsPath, scriptPath string) error {
+type hookEvent struct{ name, matcher string }
+
+// Claude and Gemini use the same hook *format* but different event *names*.
+// Gemini calls the turn boundaries BeforeAgent/AfterAgent (not UserPromptSubmit/
+// Stop) and rejects unknown names, so each gets its own set.
+var claudeHookEvents = []hookEvent{
+	{"SessionStart", ""},
+	{"UserPromptSubmit", ""},
+	{"Notification", "idle_prompt|permission_prompt|elicitation_dialog"},
+	{"Stop", ""},
+	{"SessionEnd", ""},
+}
+var geminiHookEvents = []hookEvent{
+	{"SessionStart", ""},
+	{"BeforeAgent", ""}, // ≈ UserPromptSubmit → working
+	{"Notification", ""},
+	{"AfterAgent", ""}, // ≈ Stop → idle
+	{"SessionEnd", ""},
+}
+
+// mergeAgoraiHooks rewrites the agorai hook entries in a settings.json: it strips
+// every existing agorai entry (so stale/wrong event names are removed) and adds
+// the given events. Backs up the original. Idempotent and self-correcting.
+func mergeAgoraiHooks(settingsPath, scriptPath string, events []hookEvent) error {
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return err
 	}
@@ -76,36 +97,32 @@ func mergeAgoraiHooks(settingsPath, scriptPath string) error {
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-
-	add := func(event, matcher string) {
-		existing, _ := hooks[event].([]any)
-		// If an agorai entry already exists for this event, just keep its matcher
-		// current (e.g. a new notification type was added) instead of duplicating.
-		for _, e := range existing {
-			if entryHasAgorai(e) {
-				if m, ok := e.(map[string]any); ok {
-					if matcher != "" {
-						m["matcher"] = matcher
-					} else {
-						delete(m, "matcher")
-					}
-				}
-				return
+	// drop any existing agorai entries (under any event name) before re-adding
+	for ev, v := range hooks {
+		arr, ok := v.([]any)
+		if !ok {
+			continue
+		}
+		kept := arr[:0]
+		for _, e := range arr {
+			if !entryHasAgorai(e) {
+				kept = append(kept, e)
 			}
 		}
-		entry := map[string]any{
-			"hooks": []any{map[string]any{"type": "command", "command": scriptPath}},
+		if len(kept) == 0 {
+			delete(hooks, ev)
+		} else {
+			hooks[ev] = kept
 		}
-		if matcher != "" {
-			entry["matcher"] = matcher
-		}
-		hooks[event] = append(existing, entry)
 	}
-	add("SessionStart", "")
-	add("UserPromptSubmit", "")
-	add("Notification", "idle_prompt|permission_prompt|elicitation_dialog")
-	add("Stop", "")
-	add("SessionEnd", "")
+	for _, ev := range events {
+		entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": scriptPath}}}
+		if ev.matcher != "" {
+			entry["matcher"] = ev.matcher
+		}
+		existing, _ := hooks[ev.name].([]any)
+		hooks[ev.name] = append(existing, entry)
+	}
 	settings["hooks"] = hooks
 
 	out, err := json.MarshalIndent(settings, "", "  ")
@@ -115,43 +132,40 @@ func mergeAgoraiHooks(settingsPath, scriptPath string) error {
 	return os.WriteFile(settingsPath, out, 0o644)
 }
 
-// ensureGeminiHooks wires the agorai hooks into ~/.gemini/settings.json on demand
-// (so gemini sessions report state without a manual `agorai install`). Idempotent
-// and best-effort.
+// ensureGeminiHooks wires the agorai hooks (with gemini's event names) into
+// ~/.gemini/settings.json on demand. Idempotent, self-correcting, best-effort.
 func ensureGeminiHooks() {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return
 	}
 	settingsPath := filepath.Join(home, ".gemini", "settings.json")
-	if b, err := os.ReadFile(settingsPath); err == nil && entryHasAgorai(geminiHooksPresent(b)) {
-		return // already wired
+	// Skip only if the correct (BeforeAgent) hook is already wired.
+	if b, err := os.ReadFile(settingsPath); err == nil && geminiHooksCorrect(b) {
+		return
 	}
 	scriptPath, err := writeHookScript(home)
 	if err != nil {
 		return
 	}
-	_ = mergeAgoraiHooks(settingsPath, scriptPath)
+	_ = mergeAgoraiHooks(settingsPath, scriptPath, geminiHookEvents)
 }
 
-// geminiHooksPresent returns the first agorai hook entry found in a settings
-// blob (or nil), so ensureGeminiHooks can skip work when already wired.
-func geminiHooksPresent(b []byte) any {
+// geminiHooksCorrect reports whether an agorai entry is wired under gemini's
+// BeforeAgent event (i.e. already migrated to the correct names).
+func geminiHooksCorrect(b []byte) bool {
 	var s map[string]any
 	if json.Unmarshal(b, &s) != nil {
-		return nil
+		return false
 	}
 	hooks, _ := s["hooks"].(map[string]any)
-	for _, v := range hooks {
-		if arr, ok := v.([]any); ok {
-			for _, e := range arr {
-				if entryHasAgorai(e) {
-					return e
-				}
-			}
+	arr, _ := hooks["BeforeAgent"].([]any)
+	for _, e := range arr {
+		if entryHasAgorai(e) {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 func entryHasAgorai(e any) bool {

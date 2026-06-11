@@ -197,7 +197,8 @@ const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICK
 	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET) and check out the PR's branch there with `gh pr checkout` (clone the repository into it first if needed). " +
 	"Then analyze the PR's changes against the ticket's requirements and give me a clear, actionable implementation plan: what the PR already covers, what is missing or incorrect, edge cases and tests to consider, and the concrete next steps with file paths. " +
 	"Treat the ticket description as the source of truth for the desired end state. " +
-	"NEVER commit or push without asking me to confirm first, and don't open PRs or post anything to GitHub/Linear — produce the plan here for me to review."
+	"NEVER commit or push without asking me to confirm first, and don't open PRs or post anything to GitHub/Linear — produce the plan here for me to review. " +
+	"Finally, if the `/lucid-adr` command (the lucid-adr skill) is available here, run it to archive the key decisions from this work; if it isn't available, skip this step."
 
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
 func scratchWorkspace() string { return appWorkspace("scratch") }
@@ -579,15 +580,17 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	recap := ""
 	if p.TranscriptPath != "" {
 		var actualModel string
-		recap, actualModel = lastAssistantInfo(p.TranscriptPath)
+		recap, actualModel = agentFor(sess.agent).LastLine(p.TranscriptPath) // claude/gemini parse their own log
 		if actualModel != "" {
 			sess.setActualModel(actualModel)
 		}
 	}
 
 	switch {
-	case p.HookEventName == "UserPromptSubmit":
+	case p.HookEventName == "UserPromptSubmit", p.HookEventName == "BeforeAgent": // gemini: BeforeAgent
 		sess.setState(StateWorking, "Working…")
+	case p.HookEventName == "AfterAgent": // gemini: turn finished (≈ Stop)
+		sess.setState(StateIdle, fallback(recap, "Finished — waiting for next instruction"))
 	case p.HookEventName == "Notification" && p.NotificationType == "permission_prompt":
 		sess.setState(StatePerm, fallback(recap, "Wants permission to run a command"))
 		go s.parsePromptSoon(sess) // extract the actual options from the screen
