@@ -59,6 +59,20 @@ func modelAllowed(id string) bool {
 	return false
 }
 
+// modelAllowedFor validates a model id against the chosen agent's list (claude
+// also accepts pinned versions).
+func modelAllowedFor(agent AgentKind, id string) bool {
+	if normalizeAgent(agent) == AgentClaude {
+		return modelAllowed(id)
+	}
+	for _, m := range agentFor(agent).Models() {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func modelArgs(id string) []string {
 	if id == "" {
 		return nil

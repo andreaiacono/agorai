@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Button is a configurable session-launch button. The schema is richer than
@@ -62,18 +63,26 @@ func defaultButtons() []Button {
 			Workspace: &ButtonWorkspace{Pick: true},
 		},
 		{
-			ID: "new-pr", Label: "New PR", Icon: "ticket", Mode: "ticket",
+			ID: "new-pr", Label: "New PR", Icon: "ticket", Mode: "config",
 			Agents: allAgents, ShowModel: true,
-			Workspace: &ButtonWorkspace{Dir: "~/dev/PRs", Trust: true},
-			Inputs:    []ButtonInput{{ID: "ticket", Label: "Linear ticket", Placeholder: "e.g. BLUE-900", Required: true, Transform: "blue-prefix"}},
+			Workspace:   &ButtonWorkspace{Dir: "~/dev/PRs", Trust: true},
+			Inputs:      []ButtonInput{{ID: "ticket", Label: "Linear ticket", Placeholder: "e.g. BLUE-900", Required: true, Transform: "blue-prefix"}},
+			Prompt:      strings.NewReplacer("$TICKET", "{ticket}", "$DIR", "{workspace}").Replace(ticketPlanPromptTemplate),
+			SessionName: "Ticket {ticket}",
 		},
 		{
-			ID: "review", Label: "Review PR", Icon: "review", Mode: "review",
+			ID: "review", Label: "Review PR", Icon: "review", Mode: "config",
 			Agents: allAgents, ShowModel: true, Unattended: true, ExcludeEnv: []string{"DATABASE_URL"},
 			Workspace: &ButtonWorkspace{Scratch: "review"},
 			Variants: []ButtonVariant{
-				{ID: "ticket", Label: "Linear ticket", Inputs: []ButtonInput{{ID: "ticket", Placeholder: "e.g. BLUE-900", Transform: "blue-prefix"}}},
-				{ID: "pr", Label: "GitHub PR", Inputs: []ButtonInput{{ID: "pr", Placeholder: "PR URL or owner/repo#123"}}},
+				{ID: "ticket", Label: "Linear ticket",
+					Inputs:      []ButtonInput{{ID: "ticket", Label: "Linear ticket", Placeholder: "e.g. BLUE-900", Required: true, Transform: "blue-prefix"}},
+					Prompt:      strings.ReplaceAll(reviewPromptTemplate, "$TICKET", "{ticket}"),
+					SessionName: "Review {ticket}"},
+				{ID: "pr", Label: "GitHub PR",
+					Inputs:      []ButtonInput{{ID: "pr", Label: "GitHub PR", Placeholder: "PR URL or owner/repo#123", Required: true}},
+					Prompt:      strings.ReplaceAll(reviewPrPromptTemplate, "$PR", "{pr}"),
+					SessionName: "Review {pr}"},
 			},
 		},
 		{
@@ -99,4 +108,81 @@ func loadButtons() []Button {
 
 func (s *Server) handleButtons(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, loadButtons())
+}
+
+func findButton(id string) *Button {
+	for i, b := range loadButtons() {
+		if b.ID == id {
+			return &loadButtons()[i] // re-load to get an addressable copy
+		}
+	}
+	return nil
+}
+
+func (b *Button) variant(id string) *ButtonVariant {
+	for i := range b.Variants {
+		if b.Variants[i].ID == id {
+			return &b.Variants[i]
+		}
+	}
+	if len(b.Variants) > 0 {
+		return &b.Variants[0] // default to the first
+	}
+	return nil
+}
+
+// applyTransform applies a named input transform (kept small + explicit).
+func applyTransform(name, val string) string {
+	switch name {
+	case "blue-prefix":
+		if val != "" && isAllDigits(val) {
+			return "BLUE-" + val
+		}
+	}
+	return val
+}
+
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// fillTemplate replaces {key} with vals[key].
+func fillTemplate(tpl string, vals map[string]string) string {
+	for k, v := range vals {
+		tpl = strings.ReplaceAll(tpl, "{"+k+"}", v)
+	}
+	return tpl
+}
+
+// resolveWorkspace turns a button's workspace spec into an absolute cwd, creating
+// the dir as needed. Returns "" for a pick workspace (handled by the open flow).
+func resolveWorkspace(ws *ButtonWorkspace) (string, bool) {
+	if ws == nil {
+		return "", false
+	}
+	switch {
+	case ws.Scratch != "":
+		return appWorkspace(ws.Scratch), true
+	case ws.Dir != "":
+		dir := expandHome(ws.Dir)
+		if os.MkdirAll(dir, 0o755) != nil {
+			return "", false
+		}
+		return dir, true
+	}
+	return "", false
+}
+
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
 }

@@ -426,6 +426,10 @@ const overlay = document.getElementById("overlay");
 async function openModal(initialMode = "open") {
   overlay.classList.add("open");
   document.getElementById("search").value = "";
+  // reset anything a config button may have changed
+  document.getElementById("modal").classList.remove("config-mode");
+  document.querySelector(".model-row").style.display = "";
+  populateAgentOptions(null); // all agents
   resumables = []; // refetched when the Resume tab is opened
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []);
   roots = await fetch("/api/roots").then((r) => r.json()).catch(() => []);
@@ -448,10 +452,9 @@ async function setMode(m) {
   mode = m;
   document.getElementById("modal-title").innerHTML = MODAL_TITLES[m] || MODAL_TITLES.open;
   const modal = document.getElementById("modal");
+  modal.classList.remove("config-mode");
   modal.classList.toggle("wt-mode", m === "worktree");
   modal.classList.toggle("resume-mode", m === "resume");
-  modal.classList.toggle("review-mode", m === "review");
-  modal.classList.toggle("ticket-mode", m === "ticket");
   // The agent choice applies everywhere except the unused worktree mode. Refresh
   // the model list so it matches the agent that will actually run.
   if (m === "worktree") document.getElementById("agent-sel").value = "claude";
@@ -462,13 +465,6 @@ async function setMode(m) {
   document.getElementById("newdir-name").value = "";
   document.getElementById("search").placeholder = m === "resume" ? "Filter past sessions…" : "Filter repos…";
 
-  if (m === "review") {
-    document.querySelector('input[name="review-source"][value="ticket"]').checked = true;
-    setReviewSource("ticket");
-  }
-  if (m === "ticket") {
-    document.getElementById("ticket-input").value = "";
-  }
   if (m === "resume") {
     resumables = await fetchResumables(); // for the currently selected agent
   }
@@ -481,51 +477,83 @@ function fetchResumables() {
     .then((r) => r.json()).catch(() => []);
 }
 
-function reviewSource() {
-  const el = document.querySelector('input[name="review-source"]:checked');
-  return el ? el.value : "ticket";
+/* ---------- config-driven buttons (New PR / Review / custom) ---------- */
+
+// Entry point from the top bar: route to the open picker, resume, or a
+// config-driven form depending on the button's mode.
+function openButton(b) {
+  if (b.mode === "config") return openConfig(b);
+  openModal(b.mode || "open");
 }
 
-function setReviewSource(src) {
-  const label = document.getElementById("review-input-label");
-  const hint = document.getElementById("review-input-hint");
-  const input = document.getElementById("review-ticket");
-  if (src === "pr") {
-    label.textContent = "GitHub PR";
-    input.placeholder = "PR URL or owner/repo#123";
-    hint.textContent = "The PR is reviewed directly via `gh` — no Linear ticket needed.";
-    input.value = "";
-  } else {
-    label.textContent = "Linear ticket";
-    input.placeholder = "e.g. BLUE-900";
-    hint.textContent = "The repository is taken from the PR in the ticket — no directory needed.";
-    // Pre-fill the usual project prefix so you only type the number.
-    input.value = "BLUE-";
-  }
-  input.focus();
-  input.setSelectionRange(input.value.length, input.value.length); // cursor at end
+let configBtn = null;     // the button currently shown in the config form
+let variantIdx = 0;       // selected variant index (for buttons with variants)
+
+async function openConfig(b) {
+  configBtn = b;
+  variantIdx = 0;
+  mode = "config";
+  overlay.classList.add("open");
+  const modal = document.getElementById("modal");
+  ["wt-mode", "resume-mode", "review-mode", "ticket-mode", "newdir-mode"].forEach((c) => modal.classList.remove(c));
+  modal.classList.add("config-mode");
+  document.getElementById("modal-title").textContent = b.label;
+  populateAgentOptions(b.agents);
+  document.querySelector(".model-row").style.display = b.showModel === false ? "none" : "";
+  await populateModels();
+  renderConfigForm();
 }
 
-function launchTicket() {
-  let ticket = document.getElementById("ticket-input").value.trim();
-  if (!ticket) { alert("Enter a Linear ticket number."); return; }
-  if (/^\d+$/.test(ticket)) ticket = "BLUE-" + ticket; // bare number → default project
-  createSession({ mode: "ticket", ticket, model: selectedModel(), agent: selectedAgent() });
+// Fill the agent dropdown with the button's allowed agents (all if unspecified).
+function populateAgentOptions(agents) {
+  const list = (agents && agents.length) ? agents : Object.keys(AGENT_NAMES);
+  const sel = document.getElementById("agent-sel");
+  const prev = sel.value;
+  sel.innerHTML = list.map((a) => `<option value="${esc(a)}">${esc(AGENT_NAMES[a] || a)}</option>`).join("");
+  if (list.includes(prev)) sel.value = prev;
+  document.querySelector(".agent-row").style.display = list.length > 1 ? "" : "none";
 }
 
-function launchReview() {
-  const source = reviewSource();
-  const value = document.getElementById("review-ticket").value.trim();
-  if (!value) {
-    alert(source === "pr" ? "Enter a GitHub PR (URL or owner/repo#123)." : "Enter a Linear ticket number.");
-    return;
+function activeVariant() {
+  return configBtn && configBtn.variants && configBtn.variants.length ? configBtn.variants[variantIdx] : null;
+}
+
+function onVariantChange(i) {
+  variantIdx = i;
+  renderConfigForm();
+}
+
+function renderConfigForm() {
+  const b = configBtn, form = document.getElementById("config-form");
+  const variant = activeVariant();
+  const inputs = (variant ? variant.inputs : b.inputs) || [];
+  let html = "";
+  if (b.variants && b.variants.length) {
+    html += `<div class="review-source">` + b.variants.map((v, i) =>
+      `<label><input type="radio" name="cfg-variant" value="${esc(v.id)}" ${i === variantIdx ? "checked" : ""} onchange="onVariantChange(${i})"> ${esc(v.label)}</label>`
+    ).join("") + `</div>`;
   }
-  const agent = selectedAgent();
-  if (source === "pr") {
-    createSession({ mode: "review", pr: value, model: selectedModel(), agent });
-  } else {
-    createSession({ mode: "review", ticket: value, model: selectedModel(), agent });
+  for (const inp of inputs) {
+    html += `<label class="field"><span class="field-label">${esc(inp.label || inp.id)}</span>
+      <input class="cfg-input" data-id="${esc(inp.id)}" placeholder="${esc(inp.placeholder || "")}" autocomplete="off"></label>`;
   }
+  html += `<button class="review-go" onclick="launchConfig()">Start</button>`;
+  form.innerHTML = html;
+  const first = form.querySelector(".cfg-input");
+  if (first) first.focus();
+}
+
+function launchConfig() {
+  const b = configBtn, variant = activeVariant();
+  const defs = (variant ? variant.inputs : b.inputs) || [];
+  const inputs = {};
+  for (const el of document.querySelectorAll("#config-form .cfg-input")) {
+    inputs[el.dataset.id] = el.value.trim();
+  }
+  for (const d of defs) {
+    if (d.required && !inputs[d.id]) { alert((d.label || d.id) + " is required"); return; }
+  }
+  createSession({ button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel() });
 }
 
 function launchScratch() {
@@ -823,7 +851,7 @@ async function renderTopBar() {
     el.className = "new-btn";
     const ico = BUTTON_ICONS[b.icon] || "";
     el.innerHTML = (ico ? `<b>${esc(ico)}</b> ` : "") + esc(b.label);
-    el.onclick = () => openModal(b.mode || "open");
+    el.onclick = () => openButton(b);
     bar.appendChild(el);
   }
 }

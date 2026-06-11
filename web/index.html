@@ -81,22 +81,7 @@
       <div class="wt-note">A fresh git worktree + branch is created so this session can edit in parallel without touching your other checkouts.</div>
       <div class="resume-note">Re-opens a past session with its full history in a hosted terminal. Don't run the same session in two places at once.</div>
       <label class="resume-opts"><input type="checkbox" id="fork-chk"> Fork a copy — use if the session is still running (e.g. a <code>claude agents</code> bg session)</label>
-      <div class="ticket-form">
-        <label class="field"><span class="field-label">Linear ticket</span>
-          <input id="ticket-input" placeholder="e.g. BLUE-900" autocomplete="off"></label>
-        <div class="field-hint">Claude will find the linked PR, check it out under <code>~/dev/PRs/&lt;ticket&gt;</code>, and propose an implementation plan.</div>
-        <button class="review-go" onclick="launchTicket()">Start session</button>
-      </div>
-      <div class="review-form">
-        <div class="review-source">
-          <label><input type="radio" name="review-source" value="ticket" checked onchange="setReviewSource('ticket')"> Linear ticket</label>
-          <label><input type="radio" name="review-source" value="pr" onchange="setReviewSource('pr')"> GitHub PR</label>
-        </div>
-        <label class="field"><span class="field-label" id="review-input-label">Linear ticket</span>
-          <input id="review-ticket" placeholder="e.g. BLUE-900" autocomplete="off"></label>
-        <div class="field-hint" id="review-input-hint">The repository is taken from the PR in the ticket — no directory needed.</div>
-        <button class="review-go" onclick="launchReview()">Start review</button>
-      </div>
+      <div class="config-form" id="config-form"><!-- rendered from the button config --></div>
       <div class="repo-list" id="repo-list"></div>
     </div>
   </div>

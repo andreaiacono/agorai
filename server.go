@@ -170,7 +170,11 @@ type createReq struct {
 	Parent    string    `json:"parent"`    // for "newdir": the parent root dir
 	Dir       string    `json:"dir"`       // for "newdir": the new folder name
 	GitInit   bool      `json:"gitInit"`   // for "newdir": run `git init`
-	Agent     AgentKind `json:"agent"`     // "" | "claude" | "codex" (open mode)
+	Agent     AgentKind `json:"agent"`     // "" | "claude" | "codex" | "gemini"
+	// config-driven buttons (mode "config"):
+	Button  string            `json:"button"`  // button id from /api/buttons
+	Variant string            `json:"variant"` // chosen variant id (if the button has variants)
+	Inputs  map[string]string `json:"inputs"`  // input id → value
 }
 
 // reviewCommentsSuffix is appended to both review prompts: after the analysis,
@@ -196,25 +200,8 @@ const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICK
 	"Then analyze the PR's changes against the ticket's requirements and give me a clear, actionable implementation plan: what the PR already covers, what is missing or incorrect, edge cases and tests to consider, and the concrete next steps with file paths. " +
 	"Treat the ticket description as the source of truth for the desired end state. Don't push, comment on GitHub/Linear, or open new PRs — just produce the plan here for me to review."
 
-// reviewWorkspace is a dedicated dir for review sessions (gh-only, repo-agnostic).
-func reviewWorkspace() string { return appWorkspace("review") }
-
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
 func scratchWorkspace() string { return appWorkspace("scratch") }
-
-// ticketWorkspace is where "session for ticket" sessions land: ~/dev/PRs, the
-// parent under which Claude checks out each ticket's PR into its own subdir.
-func ticketWorkspace() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "/tmp"
-	}
-	dir := filepath.Join(home, "dev", "PRs")
-	if os.MkdirAll(dir, 0o755) != nil {
-		return home
-	}
-	return dir
-}
 
 // appWorkspace returns ~/.agorai/<name>, creating it if needed — a contained
 // home for sessions that don't belong to a repo, so folder-trust is accepted
@@ -297,6 +284,57 @@ func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name
 	writeJSON(w, map[string]string{"id": sess.ID})
 }
 
+// handleConfigLaunch spawns a session from a configurable button (/api/buttons):
+// it resolves the active variant's inputs, applies transforms, fills the prompt
+// and session-name templates, resolves the workspace, and spawns the chosen
+// agent. Replaces the bespoke ticket/review handlers.
+func (s *Server) handleConfigLaunch(w http.ResponseWriter, req createReq, model string) {
+	btn := findButton(req.Button)
+	if btn == nil {
+		http.Error(w, "unknown button", http.StatusBadRequest)
+		return
+	}
+
+	inputs, prompt, sessionName := btn.Inputs, btn.Prompt, btn.SessionName
+	if len(btn.Variants) > 0 {
+		v := btn.variant(req.Variant)
+		if v == nil {
+			http.Error(w, "unknown variant", http.StatusBadRequest)
+			return
+		}
+		inputs, prompt, sessionName = v.Inputs, v.Prompt, v.SessionName
+	}
+
+	vals := map[string]string{}
+	for _, in := range inputs {
+		val := applyTransform(in.Transform, strings.TrimSpace(req.Inputs[in.ID]))
+		if in.Required && val == "" {
+			http.Error(w, in.ID+" is required", http.StatusBadRequest)
+			return
+		}
+		vals[in.ID] = val
+	}
+
+	cwd, ok := resolveWorkspace(btn.Workspace)
+	if !ok {
+		http.Error(w, "this button needs a fixed or scratch workspace", http.StatusBadRequest)
+		return
+	}
+	vals["workspace"] = cwd
+
+	prompt = fillTemplate(prompt, vals)
+	name := fillTemplate(sessionName, vals)
+	if name == "" {
+		name = btn.Label
+	}
+
+	if prompt != "" {
+		s.startPrompted(w, req.Agent, cwd, name, "", model, prompt, name+"…", btn.Unattended, btn.ExcludeEnv)
+		return
+	}
+	s.startSession(w, req.Agent, cwd, name, "", model)
+}
+
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req createReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -305,8 +343,14 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	model := req.Model
-	if !modelAllowed(model) {
-		model = "" // ignore anything not in our list (it becomes a CLI arg)
+	if !modelAllowedFor(req.Agent, model) {
+		model = "" // ignore anything not in the chosen agent's list
+	}
+
+	// Config-driven button: resolve inputs/prompt/workspace from /api/buttons.
+	if req.Button != "" {
+		s.handleConfigLaunch(w, req, model)
+		return
 	}
 
 	// Resume takes its cwd from our own on-disk scan (trusted), never the client,
@@ -365,52 +409,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Review: spawn a session in the chosen repo with a templated initial prompt
-	// (passed to claude as its first message via the positional prompt arg).
-	if req.Mode == "review" {
-		ticket := strings.TrimSpace(req.Ticket)
-		pr := strings.TrimSpace(req.Pr)
-		if ticket == "" && pr == "" {
-			http.Error(w, "ticket or pr required", http.StatusBadRequest)
-			return
-		}
-		// No repo to choose — the review works via `gh` and finds the PR's repo
-		// from the ticket/PR reference. Spawn in a dedicated workspace (not the
-		// whole home dir) so its folder-trust stays contained and is accepted once.
-		cwd := reviewWorkspace()
-		var prompt, label, recap string
-		if pr != "" {
-			prompt = strings.ReplaceAll(reviewPrPromptTemplate, "$PR", pr)
-			label = "Review " + pr
-			recap = "Reviewing " + pr + "…"
-		} else {
-			prompt = strings.ReplaceAll(reviewPromptTemplate, "$TICKET", ticket)
-			label = "Review " + ticket
-			recap = "Reviewing " + ticket + "…"
-		}
-
-		// A review only reads the PR via `gh` (no checkout/writes), so run it
-		// unattended (no approval prompts) and drop DATABASE_URL so it can't query
-		// the DB. Works for whichever agent the user picked.
-		s.startPrompted(w, req.Agent, cwd, label, "", model, prompt, recap, true, []string{"DATABASE_URL"})
-		return
-	}
-
-	// Ticket: a working session for a Linear ticket. Spawn in the PRs workspace;
-	// Claude looks up the ticket, checks out its PR into a subdir, and produces
-	// an implementation plan. Permissions stay ON — this is real interactive work.
-	if req.Mode == "ticket" {
-		ticket := strings.TrimSpace(req.Ticket)
-		if ticket == "" {
-			http.Error(w, "ticket required", http.StatusBadRequest)
-			return
-		}
-		dir := ticketWorkspace()
-		prompt := strings.NewReplacer("$TICKET", ticket, "$DIR", dir).Replace(ticketPlanPromptTemplate)
-		// Real interactive work, so permissions stay ON (not unattended).
-		s.startPrompted(w, req.Agent, dir, "Ticket "+ticket, "", model, prompt, "Planning "+ticket+"…", false, nil)
-		return
-	}
+	// Note: the Review and "New PR" flows are now config-driven buttons handled
+	// by handleConfigLaunch above (mode "config").
 
 	// Scratch: a free session not tied to any repo/directory — runs in a
 	// dedicated workspace under ~/.agorai so nothing needs to be picked.
