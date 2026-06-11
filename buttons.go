@@ -73,17 +73,10 @@ func defaultButtons() []Button {
 		{
 			ID: "review", Label: "Review PR", Icon: "review", Mode: "config",
 			Agents: allAgents, ShowModel: true, Unattended: true, ExcludeEnv: []string{"DATABASE_URL"},
-			Workspace: &ButtonWorkspace{Scratch: "review"},
-			Variants: []ButtonVariant{
-				{ID: "ticket", Label: "Linear ticket",
-					Inputs:      []ButtonInput{{ID: "ticket", Label: "Linear ticket", Placeholder: "e.g. BLUE-900", Required: true, Transform: "blue-prefix"}},
-					Prompt:      strings.ReplaceAll(reviewPromptTemplate, "$TICKET", "{ticket}"),
-					SessionName: "Review {ticket}"},
-				{ID: "pr", Label: "GitHub PR",
-					Inputs:      []ButtonInput{{ID: "pr", Label: "GitHub PR", Placeholder: "PR URL or owner/repo#123", Required: true}},
-					Prompt:      strings.ReplaceAll(reviewPrPromptTemplate, "$PR", "{pr}"),
-					SessionName: "Review {pr}"},
-			},
+			Workspace:   &ButtonWorkspace{Scratch: "review"},
+			Inputs:      []ButtonInput{{ID: "pr", Label: "GitHub PR", Placeholder: "PR number (e.g. 7098) or URL", Required: true}},
+			Prompt:      strings.ReplaceAll(reviewPRPrompt, "$PR", "{pr}"),
+			SessionName: "Review {pr}",
 		},
 		{
 			ID: "resume", Label: "Resume Session", Icon: "resume", Mode: "resume",

@@ -183,15 +183,11 @@ type createReq struct {
 // produce a copy/paste-friendly list of short comments to post on the PR.
 const reviewCommentsSuffix = " Then, at the very end, add a section titled \"Proposed comments\" — a copy/paste-friendly list of the comments you'd post on the PR. Put each comment on its own line, prefixed with its `file:line`. Keep every comment very short and simple, with no surrounding quotes and no line breaks within a comment."
 
-// reviewPromptTemplate is the initial prompt for a ticket-based review session;
-// $TICKET is replaced with the user-supplied Linear ticket and passed to claude
-// as its first message.
-const reviewPromptTemplate = "Please spawn the reviewers for the PR contained in the linear ticket $TICKET, using the ticket description as a base for analysing the PR content. The repository to review is the one the PR belongs to — determine it from the ticket/PR, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
-
-// reviewPrPromptTemplate is the initial prompt for a review of a GitHub PR that
-// is detached from any Linear ticket; $PR is replaced with the user-supplied PR
-// reference (a URL or `owner/repo#123`).
-const reviewPrPromptTemplate = "Please spawn the reviewers for the GitHub PR $PR. The repository to review is the one the PR belongs to — determine it from the PR reference, don't assume any local directory. Work only with read-only `gh` commands (e.g. `gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: no commits, no pushes, no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
+// reviewPRPrompt is the initial prompt for a PR review; $PR is the PR the user
+// entered (a number, or a URL / owner/repo#123). A bare number assumes the
+// default repo; the linked Linear ticket is pulled from the PR description for
+// extra context.
+const reviewPRPrompt = "Please spawn the reviewers for GitHub PR $PR. If $PR is only a number, assume the repository is `light-space/light`. First read the PR description (e.g. `gh pr view $PR --json body,title,url`) and find the Linear ticket it references; use that ticket's description as additional context for the review. Work only with read-only `gh` commands (`gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: NEVER commit or push without asking me to confirm first, and no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
 
 // ticketPlanPromptTemplate is the initial prompt for a "session for ticket":
 // Claude finds the ticket's PR, checks it out under the PRs workspace, and
@@ -200,7 +196,8 @@ const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICK
 	"First, look up the ticket to understand its requirements and find the GitHub PR linked to it. " +
 	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET) and check out the PR's branch there with `gh pr checkout` (clone the repository into it first if needed). " +
 	"Then analyze the PR's changes against the ticket's requirements and give me a clear, actionable implementation plan: what the PR already covers, what is missing or incorrect, edge cases and tests to consider, and the concrete next steps with file paths. " +
-	"Treat the ticket description as the source of truth for the desired end state. Don't push, comment on GitHub/Linear, or open new PRs — just produce the plan here for me to review."
+	"Treat the ticket description as the source of truth for the desired end state. " +
+	"NEVER commit or push without asking me to confirm first, and don't open PRs or post anything to GitHub/Linear — produce the plan here for me to review."
 
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
 func scratchWorkspace() string { return appWorkspace("scratch") }
