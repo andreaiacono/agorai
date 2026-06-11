@@ -31,6 +31,7 @@ type Server struct {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/buttons", s.handleButtons)
 	mux.HandleFunc("GET /api/repos", s.handleRepos)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/models", s.handleModels)
@@ -99,8 +100,17 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.cfg.Get())
 }
 
-func (s *Server) handleResumable(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, scanResumable(50))
+func (s *Server) handleResumable(w http.ResponseWriter, r *http.Request) {
+	var list []Resumable
+	switch normalizeAgent(AgentKind(r.URL.Query().Get("agent"))) {
+	case AgentCodex:
+		list = scanCodexResumable(50)
+	case AgentGemini:
+		list = nil // gemini resume-discovery not implemented yet
+	default:
+		list = scanResumable(50)
+	}
+	writeJSON(w, s.mgr.applyPersistedNames(list))
 }
 
 // handleRoots lists the configured roots — used as parent-folder options when
@@ -221,6 +231,18 @@ func appWorkspace(name string) string {
 	return dir
 }
 
+// prepareAgent does any per-agent setup needed before spawning in cwd: codex
+// gets its folder pre-trusted; gemini gets its (Claude-compatible) hooks wired
+// so it reports state. Both are idempotent and best-effort.
+func prepareAgent(agent AgentKind, cwd string) {
+	switch agent {
+	case AgentCodex:
+		ensureCodexTrust(cwd)
+	case AgentGemini:
+		ensureGeminiHooks()
+	}
+}
+
 // startSession spawns a plain interactive session for the chosen agent and
 // writes the {id} response. It handles the two id models: claude takes the id we
 // assign (--session-id → adopt now); codex mints its own (learn it after spawn).
@@ -229,9 +251,7 @@ func appWorkspace(name string) string {
 func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model string) {
 	agent = normalizeAgent(agent)
 	a := agentFor(agent)
-	if agent == AgentCodex {
-		ensureCodexTrust(cwd) // pre-trust the dir so codex doesn't prompt
-	}
+	prepareAgent(agent, cwd)
 	sid := newUUID() // used only when the agent accepts an assigned id (claude)
 	args := a.FreshArgs(sid, model, "")
 	sess, err := s.mgr.SpawnAs(agent, cwd, name, branch, args...)
@@ -244,7 +264,34 @@ func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name,
 		s.mgr.adopt(sess, sid)
 	} else {
 		// Codex assigns its own id and reports state via its rollout file, not
-		// hooks — supervise it to learn the id and drive the panel state.
+		// hooks. Save a placeholder now so it survives a restart even before its
+		// id is known, then supervise it to learn the id + drive the state.
+		s.mgr.persistPlaceholder(sess)
+		go s.superviseCodex(sess, cwd, time.Now())
+	}
+	writeJSON(w, map[string]string{"id": sess.ID})
+}
+
+// startPrompted spawns the chosen agent with an initial prompt (used by Review
+// and New-PR/ticket). unattended runs reviews without approval prompts;
+// excludeEnv drops vars (reviews drop DATABASE_URL). Handles both id models.
+func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model, prompt, recap string, unattended bool, excludeEnv []string) {
+	agent = normalizeAgent(agent)
+	a := agentFor(agent)
+	prepareAgent(agent, cwd)
+	sid := newUUID()
+	args := a.PromptArgs(sid, model, prompt, unattended)
+	sess, err := s.mgr.SpawnAsWithoutEnv(agent, cwd, name, branch, excludeEnv, args...)
+	if err != nil {
+		http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sess.setModel(model)
+	sess.setRecap(recap)
+	if a.AssignsID() {
+		s.mgr.adopt(sess, sid)
+	} else {
+		s.mgr.persistPlaceholder(sess)
 		go s.superviseCodex(sess, cwd, time.Now())
 	}
 	writeJSON(w, map[string]string{"id": sess.ID})
@@ -265,6 +312,28 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// Resume takes its cwd from our own on-disk scan (trusted), never the client,
 	// so it bypasses the under-roots guard but only for a real local transcript.
 	if req.Mode == "resume" {
+		// Codex resumes by id (no fork) and reports state via its rollout.
+		if normalizeAgent(req.Agent) == AgentCodex {
+			res, ok := findCodexResumable(req.SessionID)
+			if !ok {
+				http.Error(w, "unknown session", http.StatusNotFound)
+				return
+			}
+			ensureCodexTrust(res.Cwd)
+			branch := gitOut(res.Cwd, "rev-parse", "--abbrev-ref", "HEAD")
+			sess, err := s.mgr.SpawnAs(AgentCodex, res.Cwd, res.Title, branch, agentFor(AgentCodex).ResumeArgs(req.SessionID)...)
+			if err != nil {
+				http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			sess.setModel(model)
+			sess.setRecap(res.Recap)
+			s.mgr.adopt(sess, req.SessionID) // the id is known up front for a resume
+			go s.superviseCodex(sess, res.Cwd, time.Now())
+			writeJSON(w, map[string]string{"id": sess.ID})
+			return
+		}
+
 		res, ok := findResumable(req.SessionID)
 		if !ok {
 			http.Error(w, "unknown session", http.StatusNotFound)
@@ -320,23 +389,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			recap = "Reviewing " + ticket + "…"
 		}
 
-		// A review only reads the PR via `gh` (no checkout/writes), so skip
-		// permission prompts entirely — it runs unattended. Also drop DATABASE_URL
-		// so the reviewer can't run DB queries.
-		sid := newUUID()
-		args := []string{"--session-id", sid, "--dangerously-skip-permissions"}
-		args = append(args, modelArgs(model)...)
-		args = append(args, prompt) // positional → claude submits it as the first message
-
-		sess, err := s.mgr.SpawnWithoutEnv(cwd, label, "", []string{"DATABASE_URL"}, args...)
-		if err != nil {
-			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		sess.setModel(model)
-		sess.setRecap(recap)
-		s.mgr.adopt(sess, sid)
-		writeJSON(w, map[string]string{"id": sess.ID})
+		// A review only reads the PR via `gh` (no checkout/writes), so run it
+		// unattended (no approval prompts) and drop DATABASE_URL so it can't query
+		// the DB. Works for whichever agent the user picked.
+		s.startPrompted(w, req.Agent, cwd, label, "", model, prompt, recap, true, []string{"DATABASE_URL"})
 		return
 	}
 
@@ -351,20 +407,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		dir := ticketWorkspace()
 		prompt := strings.NewReplacer("$TICKET", ticket, "$DIR", dir).Replace(ticketPlanPromptTemplate)
-
-		sid := newUUID()
-		args := append([]string{"--session-id", sid}, modelArgs(model)...)
-		args = append(args, prompt) // positional → claude submits it as the first message
-
-		sess, err := s.mgr.Spawn(dir, "Ticket "+ticket, "", args...)
-		if err != nil {
-			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		sess.setModel(model)
-		sess.setRecap("Planning " + ticket + "…")
-		s.mgr.adopt(sess, sid)
-		writeJSON(w, map[string]string{"id": sess.ID})
+		// Real interactive work, so permissions stay ON (not unattended).
+		s.startPrompted(w, req.Agent, dir, "Ticket "+ticket, "", model, prompt, "Planning "+ticket+"…", false, nil)
 		return
 	}
 
@@ -558,7 +602,10 @@ func (s *Server) startCodexTailers() {
 	for _, dto := range s.mgr.List() {
 		sess := s.mgr.Get(dto.ID)
 		if sess != nil && sess.agent == AgentCodex {
-			go s.superviseCodex(sess, sess.workdir(), time.Time{})
+			// after=now: a session resumed by id already has it (the learn step is
+			// skipped); a pending one must only match a rollout created from here
+			// on, not a stale one left in the same dir by an earlier session.
+			go s.superviseCodex(sess, sess.workdir(), time.Now())
 		}
 	}
 }
@@ -572,7 +619,7 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 	if !sess.beginTailing() {
 		return // already supervised
 	}
-	var lastState, lastRecap string
+	var lastSig string
 	for {
 		if s.mgr.Get(sess.ID) == nil || sess.currentState() == StateDone {
 			return
@@ -594,13 +641,25 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 				if model != "" {
 					sess.setActualModel(model)
 				}
+
+				// On an approval, parse the on-screen prompt so the panel can show
+				// real answer buttons (codex's approval is a numbered select, just
+				// like claude's); fall back to the rollout justification for text.
 				shown := recap
-				if state == StatePerm && question != "" {
-					shown = question // surface the approval question as the recap
+				var opts []PromptOption
+				if state == StatePerm {
+					q, ctx, o := parsePermissionPrompt(sess.recentBytes(16 * 1024))
+					opts = o
+					sess.setPrompt(fallback(q, question), ctx, o)
+					shown = fallback(question, q)
+				} else {
+					sess.setPrompt("", "", nil)
 				}
-				if state != lastState || shown != lastRecap {
+
+				sig := state + "\x00" + shown + "\x00" + strconv.Itoa(len(opts))
+				if sig != lastSig {
 					sess.setState(state, fallback(shown, codexStatusFor(state)))
-					lastState, lastRecap = state, shown
+					lastSig = sig
 					s.broadcastSessions()
 				}
 			}

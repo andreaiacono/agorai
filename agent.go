@@ -8,14 +8,15 @@ type AgentKind string
 const (
 	AgentClaude AgentKind = "claude"
 	AgentCodex  AgentKind = "codex"
+	AgentGemini AgentKind = "gemini"
 )
 
-// normalizeAgent maps an empty or not-yet-supported kind to the default
-// (claude), so sessions persisted before the field existed keep working.
+// normalizeAgent maps an empty or unknown kind to the default (claude), so
+// sessions persisted before the field existed keep working.
 func normalizeAgent(k AgentKind) AgentKind {
 	switch k {
-	case AgentCodex:
-		return AgentCodex
+	case AgentCodex, AgentGemini:
+		return k
 	default:
 		return AgentClaude
 	}
@@ -35,6 +36,10 @@ type Agent interface {
 	// FreshArgs builds the CLI args for a new session. sid is agorai's chosen id
 	// (ignored when AssignsID is false); prompt is an optional first message.
 	FreshArgs(sid, model, prompt string) []string
+	// PromptArgs builds args for a session that submits an initial prompt.
+	// unattended = run without asking for approval (used by read-only reviews,
+	// where the read-only guarantee rests on the prompt itself).
+	PromptArgs(sid, model, prompt string, unattended bool) []string
 	// ModelArgs renders the model selection as CLI args ("" = the user default).
 	ModelArgs(model string) []string
 	// ResumeArgs builds the args to resume a recorded session in place.
@@ -59,6 +64,8 @@ func agentFor(kind AgentKind) Agent {
 	switch normalizeAgent(kind) {
 	case AgentCodex:
 		return codexAgent{}
+	case AgentGemini:
+		return geminiAgent{}
 	default:
 		return claudeAgent{}
 	}
@@ -80,6 +87,16 @@ func (claudeAgent) FreshArgs(sid, model, prompt string) []string {
 		args = append(args, prompt)
 	}
 	return args
+}
+
+// PromptArgs: unattended reviews skip the permission prompts entirely.
+func (claudeAgent) PromptArgs(sid, model, prompt string, unattended bool) []string {
+	args := []string{"--session-id", sid}
+	if unattended {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	args = append(args, modelArgs(model)...)
+	return append(args, prompt)
 }
 
 func (claudeAgent) ResumeArgs(id string) []string      { return []string{"--resume", id} }

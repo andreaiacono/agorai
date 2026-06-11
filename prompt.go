@@ -32,7 +32,9 @@ var cursorFwdRe = regexp.MustCompile(`\x1b\[[0-9]*[CG]`)
 
 // optRe matches a numbered option line. Whitespace after the "." is optional
 // because the rendered prompt often has none (the spacing was cursor moves).
-var optRe = regexp.MustCompile(`^[>❯*]?\s*([1-9])[.)]\s*(.+)$`)
+// The leading marker class includes the cursors both claude (❯) and codex (›)
+// put on the selected option.
+var optRe = regexp.MustCompile(`^[>❯›*]?\s*([1-9])[.)]\s*(.+)$`)
 
 func stripANSI(b []byte) string {
 	s := cursorFwdRe.ReplaceAllString(string(b), " ")

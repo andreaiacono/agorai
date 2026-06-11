@@ -332,6 +332,12 @@ func (m *Manager) SpawnAs(agent AgentKind, cwd, name, branch string, extraArgs .
 	return m.spawn(agent, cwd, name, branch, nil, extraArgs...)
 }
 
+// SpawnAsWithoutEnv is SpawnAs but drops the given env vars (e.g. reviews run
+// without DATABASE_URL).
+func (m *Manager) SpawnAsWithoutEnv(agent AgentKind, cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
+	return m.spawn(agent, cwd, name, branch, excludeEnv, extraArgs...)
+}
+
 // hasClaudeID reports whether a live session already owns this agent session id
 // — used so the codex id-learner doesn't claim a rollout another session took.
 func (m *Manager) hasClaudeID(id string) bool {
@@ -436,9 +442,39 @@ func (m *Manager) Remove(id string) {
 	if m.store != nil {
 		m.store.remove(s.ClaudeID)
 		m.store.remove(s.resumeOf)
+		m.store.remove(s.ID) // codex placeholder records are keyed by the launch id
 	}
 	s.close()
 	m.changed()
+}
+
+// persistPlaceholder saves a session before its real id is known (codex mints
+// its id lazily). The record is keyed by the agorai launch id and marked
+// Pending, so a restart restores it as a fresh session until the real id is
+// learned (adopt then replaces it with a resumable record).
+func (m *Manager) persistPlaceholder(s *Session) {
+	if m.store == nil {
+		return
+	}
+	s.mu.Lock()
+	p := persisted{ClaudeID: s.ID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent, Pending: true}
+	s.mu.Unlock()
+	m.store.upsert(p)
+}
+
+// applyPersistedNames overrides each resumable's title with the name agorai has
+// on record for that session (set at spawn, updated on rename), so the Resume
+// picker shows your renamed label when it knows the session.
+func (m *Manager) applyPersistedNames(rs []Resumable) []Resumable {
+	if m.store == nil {
+		return rs
+	}
+	for i := range rs {
+		if p, ok := m.store.lookup(rs[i].SessionID); ok && p.Name != "" {
+			rs[i].Title = p.Name
+		}
+	}
+	return rs
 }
 
 // forget drops a session from persistence (e.g. it ended cleanly) without
@@ -455,6 +491,22 @@ func (m *Manager) RestoreAll() int {
 	n := 0
 	for _, p := range m.store.all() {
 		a := agentFor(p.Agent)
+
+		// A pending record never learned a resumable id (a codex session with no
+		// activity yet). Bring it back as a fresh session in the same dir, and
+		// re-save the placeholder under the new launch id (drop the old one).
+		if p.Pending {
+			s, err := m.spawn(p.Agent, p.Cwd, p.Name, p.Branch, nil, a.FreshArgs("", p.Model, "")...)
+			m.store.remove(p.ClaudeID)
+			if err != nil {
+				continue
+			}
+			s.setModel(p.Model)
+			m.persistPlaceholder(s)
+			n++
+			continue
+		}
+
 		args := append(a.ResumeArgs(p.ClaudeID), a.ModelArgs(p.Model)...)
 		s, err := m.spawn(p.Agent, p.Cwd, p.Name, p.Branch, nil, args...)
 		if err != nil {
@@ -516,8 +568,10 @@ func (m *Manager) adopt(s *Session, claudeID string) {
 	s.mu.Lock()
 	s.ClaudeID = claudeID
 	p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
+	launchID := s.ID
 	s.mu.Unlock()
 	if m.store != nil {
+		m.store.remove(launchID) // drop the spawn-time placeholder (no-op for claude)
 		m.store.upsert(p)
 	}
 }

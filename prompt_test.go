@@ -153,6 +153,28 @@ func TestParsePermissionPrompt_contextSkipsRepaintDebris(t *testing.T) {
 	}
 }
 
+func TestParsePermissionPrompt_codexApproval(t *testing.T) {
+	// codex's approval is a numbered select like claude's, but marks the selected
+	// option with "›" instead of "❯" and lists hotkeys in parentheses
+	raw := []byte("Would you like to run the following command?\r\n" +
+		"Reason: fetch PR metadata for the review\r\n" +
+		"$ gh pr view 6934 --json number,title\r\n" +
+		"› 1. Yes, proceed (y)\r\n" +
+		"  2. Yes, and don't ask again for commands that start with `gh pr view` (p)\r\n" +
+		"  3. No, and tell Codex what to do differently (esc)\r\n" +
+		"Press enter to confirm or esc to cancel\r\n")
+	_, _, opts := parsePermissionPrompt(raw)
+	if len(opts) != 3 {
+		t.Fatalf("want 3 options, got %d: %+v", len(opts), opts)
+	}
+	if !strings.HasPrefix(opts[0].Label, "Yes, proceed") {
+		t.Errorf("opt1 wrong: %+v", opts[0])
+	}
+	if !strings.Contains(opts[2].Label, "No") {
+		t.Errorf("opt3 wrong: %+v", opts[2])
+	}
+}
+
 func TestParsePermissionPrompt_none(t *testing.T) {
 	_, _, opts := parsePermissionPrompt([]byte("just some normal output\nno prompt here\n"))
 	if opts != nil {

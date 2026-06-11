@@ -10,12 +10,13 @@ import (
 // persisted is the minimal record needed to bring a session back after a
 // restart: claude's session id (to `--resume`) and where to run it.
 type persisted struct {
-	ClaudeID string    `json:"claudeId"`
+	ClaudeID string    `json:"claudeId"` // the agent session id to resume; for a Pending codex record this is the agorai launch id (a placeholder store key, not resumable)
 	Cwd      string    `json:"cwd"`
 	Name     string    `json:"name"`
 	Branch   string    `json:"branch"`
 	Model    string    `json:"model"`
-	Agent    AgentKind `json:"agent,omitempty"` // empty = claude (back-compat)
+	Agent    AgentKind `json:"agent,omitempty"`   // empty = claude (back-compat)
+	Pending  bool      `json:"pending,omitempty"` // codex session saved at spawn that hasn't learned its real id yet → restore as a fresh session
 }
 
 // Store keeps the set of hosted sessions on disk so they survive a restart.
@@ -82,6 +83,14 @@ func (s *Store) remove(claudeID string) {
 	delete(s.items, claudeID)
 	s.save()
 	s.mu.Unlock()
+}
+
+// lookup returns the persisted record for a session id, if any.
+func (s *Store) lookup(id string) (persisted, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.items[id]
+	return p, ok
 }
 
 func (s *Store) all() []persisted {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // a minimal rollout mirroring the real ~/.codex/sessions format
@@ -97,6 +98,30 @@ func TestCodexRolloutMeta(t *testing.T) {
 	}
 	if cwd != "/tmp/codex-probe" {
 		t.Errorf("cwd = %q", cwd)
+	}
+}
+
+func TestParseCodexRollout_title(t *testing.T) {
+	// codex injects AGENTS.md as the first user message; the title should be the
+	// first *real* prompt after it, and the recap the last agent message.
+	body := `{"type":"session_meta","payload":{"id":"abc","cwd":"/home/andrea/dev/light"}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /home/andrea/dev/light"}]}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Fix the login redirect bug"}]}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"Looking into it"}}
+`
+	p := writeRollout(t, "rollout-title.jsonl", body)
+	r, ok := parseCodexRollout(p, time.Unix(1781000000, 0))
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if r.SessionID != "abc" || r.Cwd != "/home/andrea/dev/light" {
+		t.Errorf("meta wrong: %+v", r)
+	}
+	if r.Title != "Fix the login redirect bug" {
+		t.Errorf("title = %q (should skip the AGENTS.md injection)", r.Title)
+	}
+	if r.Recap != "Looking into it" {
+		t.Errorf("recap = %q", r.Recap)
 	}
 }
 

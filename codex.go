@@ -38,6 +38,17 @@ func (codexAgent) FreshArgs(_, model, prompt string) []string {
 	return args
 }
 
+// PromptArgs: unattended reviews use `-a never` (auto-approve, never ask) — the
+// read-only guarantee comes from the prompt, matching the claude path.
+func (codexAgent) PromptArgs(_, model, prompt string, unattended bool) []string {
+	args := []string{"--no-alt-screen"}
+	if unattended {
+		args = append(args, "-a", "never")
+	}
+	args = append(args, codexAgent{}.ModelArgs(model)...)
+	return append(args, prompt)
+}
+
 // ResumeArgs resumes a recorded session by its codex session id (UUID).
 func (codexAgent) ResumeArgs(id string) []string { return []string{"resume", id} }
 
@@ -161,6 +172,133 @@ func newestCodexSessionID(cwd string, after time.Time, claimed func(string) bool
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].mod.After(cands[j].mod) })
 	return cands[0].id
+}
+
+// scanCodexResumable returns the most recent codex sessions on disk (newest
+// first), parsing at most `limit` for title/recap — the codex equivalent of
+// scanResumable for the Resume picker.
+func scanCodexResumable(limit int) []Resumable {
+	dir := codexSessionsDir()
+	if dir == "" {
+		return nil
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "*", "*", "*", "rollout-*.jsonl"))
+
+	type fileInfo struct {
+		path string
+		mod  time.Time
+	}
+	files := make([]fileInfo, 0, len(paths))
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil {
+			files = append(files, fileInfo{p, st.ModTime()})
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+
+	out := make([]Resumable, 0, limit)
+	for _, f := range files {
+		if len(out) >= limit {
+			break
+		}
+		if r, ok := parseCodexRollout(f.path, f.mod); ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func findCodexResumable(id string) (Resumable, bool) {
+	for _, r := range scanCodexResumable(500) {
+		if r.SessionID == id {
+			return r, true
+		}
+	}
+	return Resumable{}, false
+}
+
+// parseCodexRollout reads a rollout into a Resumable: id/cwd from session_meta,
+// the title from the first real user prompt (skipping codex's injected AGENTS /
+// environment blocks), the recap from the last agent message.
+func parseCodexRollout(path string, mod time.Time) (Resumable, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Resumable{}, false
+	}
+	defer f.Close()
+
+	var id, cwd, firstPrompt, lastAgent string
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadString('\n')
+		if len(line) > 0 {
+			var l codexRolloutLine
+			if json.Unmarshal([]byte(line), &l) == nil {
+				switch l.Type {
+				case "session_meta":
+					var m codexMetaPayload
+					if json.Unmarshal(l.Payload, &m) == nil {
+						id, cwd = m.ID, m.Cwd
+					}
+				case "response_item":
+					var p struct {
+						Role    string `json:"role"`
+						Content []struct {
+							Text string `json:"text"`
+						} `json:"content"`
+					}
+					if json.Unmarshal(l.Payload, &p) == nil && p.Role == "user" && firstPrompt == "" {
+						text := ""
+						for _, c := range p.Content {
+							text += c.Text
+						}
+						if t := strings.TrimSpace(text); t != "" && !isInjectedBlock(t) {
+							firstPrompt = t
+						}
+					}
+				case "event_msg":
+					var p struct {
+						Type    string `json:"type"`
+						Message string `json:"message"`
+					}
+					if json.Unmarshal(l.Payload, &p) == nil && p.Type == "agent_message" && strings.TrimSpace(p.Message) != "" {
+						lastAgent = p.Message
+					}
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	if id == "" || cwd == "" {
+		return Resumable{}, false
+	}
+	title := truncate(oneLine(firstPrompt), 70)
+	if title == "" {
+		title = filepath.Base(cwd)
+	}
+	recap := truncate(oneLine(lastAgent), 80)
+	if recap == "" {
+		recap = "(no reply yet)"
+	}
+	return Resumable{
+		SessionID: id,
+		Cwd:       cwd,
+		Display:   shortenHome(cwd),
+		Title:     title,
+		Recap:     recap,
+		Modified:  mod.Unix(),
+		Age:       humanizeSince(mod),
+	}, true
+}
+
+// isInjectedBlock reports whether a user message is codex's auto-injected
+// context (AGENTS.md, environment, instruction blocks) rather than a real
+// prompt — those make poor session titles.
+func isInjectedBlock(text string) bool {
+	return strings.HasPrefix(text, "#") || strings.HasPrefix(text, "<")
 }
 
 // samePath reports whether two paths point at the same directory, tolerating
