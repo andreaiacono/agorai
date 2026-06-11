@@ -152,6 +152,7 @@ body {
 .session.working .name { color: var(--yellow); }
 .session.perm .name { color: var(--red); }
 .session.unread:not(.perm) .name { color: var(--green); }
+.session.done .name { color: var(--dim); } /* ended session — dim the label */
 
 /* Blink only while it wants attention and you haven't looked (unread): a pending
    permission (red) or a just-finished turn (green). Working is amber but steady.
