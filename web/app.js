@@ -24,19 +24,17 @@ function connectControl() {
       const next = msg.sessions || [];
       for (const s of next) {
         const prev = state.prevStates[s.id];
-        // Mark "unread" (→ blink) when a session newly enters a state that wants
-        // your attention: needs input, needs permission, or just finished a turn.
-        // Only on the transition, and not for the session you're already viewing.
+        // Mark "unread" (→ blink) only on an actual transition we observe while
+        // connected — into a state that wants your attention (input/permission)
+        // or a just-finished turn. `prev === undefined` is the first snapshot
+        // after a (re)connect/refresh: prime state without re-alerting you to
+        // states that already existed.
         const attention =
           s.state === "waiting" || s.state === "perm" || (prev === "working" && s.state === "idle");
-        if (s.state !== prev && attention && s.id !== state.selected) {
+        if (prev !== undefined && s.state !== prev && attention && s.id !== state.selected) {
           state.unread.add(s.id);
-          // Audible alert for a session you're not watching (skip the first
-          // snapshot, where prev is undefined, to avoid a burst on load).
-          if (prev !== undefined) {
-            if (s.state === "perm") playSound("perm");
-            else if (s.state === "idle" && prev === "working") playSound("done");
-          }
+          if (s.state === "perm") playSound("perm");
+          else if (s.state === "idle" && prev === "working") playSound("done");
         }
         if (s.state === "working") state.unread.delete(s.id); // active again, nothing pending
         state.prevStates[s.id] = s.state;
