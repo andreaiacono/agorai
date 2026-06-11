@@ -69,6 +69,28 @@ function renderSessions() {
     (needs ? ` · ${needs} need attention` : "");
 }
 
+// Small per-agent marks shown left of the session name (claude = coral burst,
+// codex = OpenAI-green ring) so you can tell at a glance which CLI a row is.
+const CLAUDE_ICON =
+  `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#d97757" stroke-width="1.6" stroke-linecap="round">` +
+  `<line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/>` +
+  `<line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/><line x1="12.2" y1="3.8" x2="3.8" y2="12.2"/></svg>`;
+const CODEX_ICON =
+  `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#10a37f" stroke-width="1.6">` +
+  `<circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.6" fill="#10a37f" stroke="none"/></svg>`;
+// Gemini = blue four-point spark
+const GEMINI_ICON =
+  `<svg width="12" height="12" viewBox="0 0 16 16" fill="#4286f5" stroke="none">` +
+  `<path d="M8 1 C8.6 4.4 11.6 7.4 15 8 C11.6 8.6 8.6 11.6 8 15 C7.4 11.6 4.4 8.6 1 8 C4.4 7.4 7.4 4.4 8 1 Z"/></svg>`;
+
+const AGENT_ICONS = { claude: CLAUDE_ICON, codex: CODEX_ICON, gemini: GEMINI_ICON };
+const AGENT_NAMES = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
+
+function agentIcon(agent) {
+  const a = AGENT_ICONS[agent] ? agent : "claude";
+  return `<span class="agent-ic" title="${AGENT_NAMES[a]}">${AGENT_ICONS[a]}</span>`;
+}
+
 function sessionCard(s) {
   const el = document.createElement("div");
   el.className = "session " + s.state
@@ -79,17 +101,14 @@ function sessionCard(s) {
   // A "question" badge (it pairs with the answer buttons). The prompt may be a
   // permission request or a "how should I do this?" question — both surface here.
   const badge = s.state === "perm" ? `<span class="badge perm">question</span>` : "";
-  // A small chip marks non-claude agents so you can tell sessions apart.
-  const agentChip = s.agent === "codex" ? `<span class="agent-chip">codex</span>` : "";
 
   // While working, show an animated "Working" with oscillating dots (1→2→3→2…).
   const recap = s.state === "working" ? `Working<span class="dots"></span>` : esc(s.recap);
 
   el.innerHTML = `
     <div class="row1">
-      <span class="dot ${s.state}"></span>
+      ${agentIcon(s.agent)}
       <span class="name" title="${esc(s.name)}">${esc(s.name)} <span class="branch">· ${esc(s.branch)}</span></span>
-      ${agentChip}
       ${badge}
       <span class="x" title="close session">✕</span>
     </div>
@@ -433,9 +452,9 @@ async function setMode(m) {
   modal.classList.toggle("resume-mode", m === "resume");
   modal.classList.toggle("review-mode", m === "review");
   modal.classList.toggle("ticket-mode", m === "ticket");
-  // The agent choice only applies to the open flow; everything else is claude.
-  // Force it so the model list matches the agent that will actually run.
-  if (m !== "open") document.getElementById("agent-sel").value = "claude";
+  // The agent choice applies everywhere except the unused worktree mode. Refresh
+  // the model list so it matches the agent that will actually run.
+  if (m === "worktree") document.getElementById("agent-sel").value = "claude";
   await populateModels();
   // reset the new-directory sub-state whenever the mode changes
   modal.classList.remove("newdir-mode");
@@ -450,10 +469,16 @@ async function setMode(m) {
   if (m === "ticket") {
     document.getElementById("ticket-input").value = "";
   }
-  if (m === "resume" && !resumables.length) {
-    resumables = await fetch("/api/resumable").then((r) => r.json()).catch(() => []);
+  if (m === "resume") {
+    resumables = await fetchResumables(); // for the currently selected agent
   }
   renderList();
+}
+
+// Resumable sessions are per-agent (claude transcripts vs codex rollouts).
+function fetchResumables() {
+  return fetch("/api/resumable?agent=" + encodeURIComponent(selectedAgent()))
+    .then((r) => r.json()).catch(() => []);
 }
 
 function reviewSource() {
@@ -485,7 +510,7 @@ function launchTicket() {
   let ticket = document.getElementById("ticket-input").value.trim();
   if (!ticket) { alert("Enter a Linear ticket number."); return; }
   if (/^\d+$/.test(ticket)) ticket = "BLUE-" + ticket; // bare number → default project
-  createSession({ mode: "ticket", ticket, model: selectedModel() });
+  createSession({ mode: "ticket", ticket, model: selectedModel(), agent: selectedAgent() });
 }
 
 function launchReview() {
@@ -495,10 +520,11 @@ function launchReview() {
     alert(source === "pr" ? "Enter a GitHub PR (URL or owner/repo#123)." : "Enter a Linear ticket number.");
     return;
   }
+  const agent = selectedAgent();
   if (source === "pr") {
-    createSession({ mode: "review", pr: value, model: selectedModel() });
+    createSession({ mode: "review", pr: value, model: selectedModel(), agent });
   } else {
-    createSession({ mode: "review", ticket: value, model: selectedModel() });
+    createSession({ mode: "review", ticket: value, model: selectedModel(), agent });
   }
 }
 
@@ -579,6 +605,10 @@ async function populateModels() {
 }
 async function onAgentChange() {
   await populateModels(); // swap the model list to match the chosen agent
+  if (mode === "resume") { // re-list past sessions for the newly selected agent
+    resumables = await fetchResumables();
+    renderList();
+  }
 }
 function onModelChange() {
   const family = document.getElementById("model-sel").value;
@@ -599,7 +629,7 @@ function launchRepo(r) {
 }
 function launchResume(r) {
   const fork = document.getElementById("fork-chk").checked;
-  createSession({ mode: "resume", sessionId: r.sessionId, fork, model: selectedModel() });
+  createSession({ mode: "resume", sessionId: r.sessionId, fork, model: selectedModel(), agent: selectedAgent() });
 }
 
 async function createSession(body) {
@@ -772,5 +802,28 @@ document.getElementById("find-input").addEventListener("keydown", (e) => {
 });
 
 document.getElementById("sound-btn").textContent = soundOn ? "🔊" : "🔇";
+renderTopBar();
 loadConfig();
 connectControl();
+
+// Glyphs for the named icons used in buttons.json.
+const BUTTON_ICONS = { plus: "+", ticket: "✦", review: "⊚", resume: "↻" };
+
+// Render the top-bar launch buttons from /api/buttons (built-in defaults,
+// overridable by ~/.agorai/buttons.json). Each button still opens its existing
+// modal via `mode` for now; the modal-from-config migration comes next.
+async function renderTopBar() {
+  const bar = document.getElementById("newbar");
+  let buttons = [];
+  try { buttons = await fetch("/api/buttons").then((r) => r.json()); } catch {}
+  if (!buttons.length) return;
+  bar.innerHTML = "";
+  for (const b of buttons) {
+    const el = document.createElement("button");
+    el.className = "new-btn";
+    const ico = BUTTON_ICONS[b.icon] || "";
+    el.innerHTML = (ico ? `<b>${esc(ico)}</b> ` : "") + esc(b.label);
+    el.onclick = () => openModal(b.mode || "open");
+    bar.appendChild(el);
+  }
+}

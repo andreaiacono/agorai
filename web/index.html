@@ -17,12 +17,7 @@
 
   <div class="topbar">
     <div class="logo">Agor<span>AI</span></div>
-    <div class="newbar">
-      <button class="new-btn" onclick="openModal('open')"><b>+</b> New Session</button>
-      <button class="new-btn" onclick="openModal('ticket')">✦ New PR</button>
-      <button class="new-btn" onclick="openModal('review')">⊚ Review PR</button>
-      <button class="new-btn" onclick="openModal('resume')">↻ Resume Session</button>
-    </div>
+    <div class="newbar" id="newbar"><!-- rendered from /api/buttons --></div>
     <div class="meta" id="meta">—</div>
     <button class="icon-btn" id="sound-btn" onclick="toggleSound()" title="Toggle alert sounds">🔊</button>
     <button class="icon-btn" id="settings-btn" onclick="openSettings()" title="Settings">⚙</button>
@@ -71,7 +66,7 @@
     <div class="modal" id="modal">
       <h2 id="modal-title">New <span>session</span></h2>
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
-      <div class="agent-row"><span>Agent</span><select id="agent-sel" onchange="onAgentChange()"><option value="claude">Claude</option><option value="codex">Codex</option></select></div>
+      <div class="agent-row"><span>Agent</span><select id="agent-sel" onchange="onAgentChange()"><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option></select></div>
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
       <label class="newdir-toggle"><input type="checkbox" id="newdir-chk" onchange="toggleNewDir()"> Create a new directory for this session</label>
       <div class="scratch-row"><button type="button" class="scratch-btn" onclick="launchScratch()">▷ Start without a repo <small>· runs in ~/.agorai/scratch</small></button></div>
