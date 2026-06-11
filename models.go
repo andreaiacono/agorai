@@ -26,6 +26,7 @@ type ModelVersion struct {
 
 var models = []ModelOption{
 	{ID: "", Label: "Default"},
+	{ID: "claude-fable-5", Label: "Fable 5"}, // Anthropic's latest; pinned id (no alias yet)
 	{ID: "opus", Label: "Opus", Versions: []ModelVersion{
 		{ID: "claude-opus-4-8", Label: "4.8"},
 		{ID: "claude-opus-4-7", Label: "4.7"},

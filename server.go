@@ -284,6 +284,24 @@ func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name
 	writeJSON(w, map[string]string{"id": sess.ID})
 }
 
+// startPicked spawns a session in a cwd chosen via the repo/dir picker. If the
+// originating pick-button carries a prompt/name template, those are applied
+// (with {workspace}/{dir} placeholders); otherwise it's a plain session named
+// after the dir. This is what makes the picker config-expressible.
+func (s *Server) startPicked(w http.ResponseWriter, req createReq, model, cwd, name, branch string) {
+	if btn := findButton(req.Button); btn != nil {
+		vals := map[string]string{"workspace": cwd, "dir": filepath.Base(cwd)}
+		if btn.SessionName != "" {
+			name = fillTemplate(btn.SessionName, vals)
+		}
+		if btn.Prompt != "" {
+			s.startPrompted(w, req.Agent, cwd, name, branch, model, fillTemplate(btn.Prompt, vals), name+"…", btn.Unattended, btn.ExcludeEnv)
+			return
+		}
+	}
+	s.startSession(w, req.Agent, cwd, name, branch, model)
+}
+
 // handleConfigLaunch spawns a session from a configurable button (/api/buttons):
 // it resolves the active variant's inputs, applies transforms, fills the prompt
 // and session-name templates, resolves the workspace, and spawns the chosen
@@ -347,10 +365,15 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		model = "" // ignore anything not in the chosen agent's list
 	}
 
-	// Config-driven button: resolve inputs/prompt/workspace from /api/buttons.
+	// Config-driven button with its own workspace (New PR / Review / custom):
+	// resolve inputs/prompt/workspace from /api/buttons. Pick-workspace buttons
+	// (New Session) instead fall through to the picker handlers below, which call
+	// startPicked to apply the button's prompt/name to the chosen dir.
 	if req.Button != "" {
-		s.handleConfigLaunch(w, req, model)
-		return
+		if btn := findButton(req.Button); btn != nil && (btn.Workspace == nil || !btn.Workspace.Pick) {
+			s.handleConfigLaunch(w, req, model)
+			return
+		}
 	}
 
 	// Resume takes its cwd from our own on-disk scan (trusted), never the client,
@@ -415,7 +438,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// Scratch: a free session not tied to any repo/directory — runs in a
 	// dedicated workspace under ~/.agorai so nothing needs to be picked.
 	if req.Mode == "scratch" {
-		s.startSession(w, req.Agent, scratchWorkspace(), "Scratch", "", model)
+		s.startPicked(w, req, model, scratchWorkspace(), "Scratch", "")
 		return
 	}
 
@@ -448,7 +471,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			_ = exec.Command("git", "-C", cwd, "init", "-b", "main").Run()
 		}
 		branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-		s.startSession(w, req.Agent, cwd, dir, branch, model)
+		s.startPicked(w, req, model, cwd, dir, branch)
 		return
 	}
 
@@ -475,7 +498,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		cwd, branch, name = wtPath, wtBranch, name+" · worktree"
 	}
 
-	s.startSession(w, req.Agent, cwd, name, branch, model)
+	s.startPicked(w, req, model, cwd, name, branch)
 }
 
 // addWorktree creates a fresh worktree + branch beside the repo so parallel

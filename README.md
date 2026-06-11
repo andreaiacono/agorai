@@ -1,7 +1,7 @@
 # agorai
 
-A tiny local dashboard for juggling several **Claude Code** (and **OpenAI Codex**)
-sessions at once.
+A tiny local dashboard for juggling several **Claude Code**, **OpenAI Codex**,
+and **Gemini CLI** sessions at once.
 
 - **Left panel** — every session with its state and a one-line recap. The dot +
   name are colour-coded so you can triage at a glance, and **blink** until you
@@ -12,10 +12,10 @@ sessions at once.
   - ⚪ **grey** — idle and seen, or ended
 - **Right panel** — the focused session's live terminal (xterm.js). Clicking a
   session focuses the terminal so you can start typing immediately.
-- **+ New Session** — pick the **agent** (Claude or Codex), then pick a repo
-  (discovered under your roots), create a **new directory** for it, or **start
-  without a repo** (runs in a dedicated `~/.agorai/scratch` workspace). A `codex`
-  chip marks Codex sessions in the list.
+- **+ New Session** — pick the **agent** (Claude / Codex / Gemini), then pick a
+  repo (discovered under your roots), create a **new directory** for it, or
+  **start without a repo** (runs in a dedicated `~/.agorai/scratch` workspace).
+  A per-agent icon marks each session in the list.
 - **New PR** — give it a Linear ticket (a bare number is prefixed with `BLUE-`);
   Claude checks out the ticket's PR under `~/dev/PRs/<ticket>` and produces an
   implementation plan.
@@ -60,6 +60,41 @@ instead of `claude`. A few differences, handled automatically:
   `~/.codex/config.toml` for the session's directory (idempotent, append-only),
   so Codex doesn't prompt.
 - Codex runs with `--no-alt-screen` so its scrollback survives agorai's replay.
+
+## Custom buttons (`~/.agorai/buttons.json`)
+
+The top-bar launch buttons are **config-driven**. Built-in defaults ship the
+**New Session / New PR / Review PR / Resume** buttons; drop a `~/.agorai/buttons.json`
+to replace them (and add your own). It's served at `GET /api/buttons` and the
+UI renders the top bar + each modal from it.
+
+A button:
+
+```jsonc
+{
+  "id": "tests", "label": "Write tests", "icon": "plus",
+  "agents": ["claude", "codex", "gemini"],   // dropdown options (omit = all)
+  "showModel": true,
+  "workspace": { "pick": true },             // show the repo/dir picker …
+  // … or  { "dir": "~/dev/PRs", "trust": true }   (fixed dir)
+  // … or  { "scratch": "review" }                  (~/.agorai/<name>)
+  "inputs": [                                // text fields (prompt buttons)
+    { "id": "area", "label": "Area", "placeholder": "e.g. billing", "required": true,
+      "transform": "blue-prefix" }           // blue-prefix: prepend BLUE- to a bare number
+  ],
+  "prompt": "Write tests for {area} in {workspace}…",   // {input} / {workspace} / {dir}
+  "sessionName": "Tests {area}",
+  "unattended": true,                        // run without approval prompts (reviews)
+  "excludeEnv": ["DATABASE_URL"]             // drop env vars (reviews)
+}
+```
+
+- **`variants`** — a radio that swaps inputs + prompt + name (e.g. Review's
+  ticket-vs-PR toggle); same fields as a button.
+- **`workspace.pick`** shows the repo/new-dir/scratch picker; a pick button may
+  still carry a `prompt`/`sessionName` (filled with `{workspace}`/`{dir}`).
+- Adding/changing a button is just a JSON edit — no rebuild. **Resume** stays a
+  built-in special (it lists past sessions rather than taking inputs).
 
 ## Run
 

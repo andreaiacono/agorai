@@ -423,19 +423,23 @@ let roots = [];          // from /api/roots        (newdir parent options)
 let mode = "open";
 const overlay = document.getElementById("overlay");
 
-async function openModal(initialMode = "open") {
+let pickBtn = null; // the pick-button currently driving the picker (for its prompt/name/agents)
+
+async function openModal(initialMode = "open", btn = null) {
+  pickBtn = btn;
   overlay.classList.add("open");
   document.getElementById("search").value = "";
   // reset anything a config button may have changed
   document.getElementById("modal").classList.remove("config-mode");
   document.querySelector(".model-row").style.display = "";
-  populateAgentOptions(null); // all agents
+  populateAgentOptions(btn ? btn.agents : null);
   resumables = []; // refetched when the Resume tab is opened
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []);
   roots = await fetch("/api/roots").then((r) => r.json()).catch(() => []);
   document.getElementById("newdir-parent").innerHTML =
     roots.map((r) => `<option value="${esc(r.path)}">${esc(r.display)}</option>`).join("");
   await setMode(initialMode); // selects the tab + renders the matching list
+  if (btn && btn.label) document.getElementById("modal-title").textContent = btn.label; // after setMode (which sets a default)
   document.getElementById("search").focus();
 }
 function closeModal() { overlay.classList.remove("open"); }
@@ -482,8 +486,9 @@ function fetchResumables() {
 // Entry point from the top bar: route to the open picker, resume, or a
 // config-driven form depending on the button's mode.
 function openButton(b) {
-  if (b.mode === "config") return openConfig(b);
-  openModal(b.mode || "open");
+  if (b.mode === "resume") return openModal("resume", b);
+  if (b.workspace && b.workspace.pick) return openModal("open", b); // the repo/dir picker
+  return openConfig(b);
 }
 
 let configBtn = null;     // the button currently shown in the config form
@@ -557,7 +562,7 @@ function launchConfig() {
 }
 
 function launchScratch() {
-  createSession({ mode: "scratch", model: selectedModel(), agent: selectedAgent() });
+  createSession({ mode: "scratch", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
 }
 
 function toggleNewDir() {
@@ -572,7 +577,7 @@ function launchNewDir() {
   const gitInit = document.getElementById("newdir-git").checked;
   if (!parent) { alert("Choose a parent folder."); return; }
   if (!dir) { alert("Enter a folder name."); return; }
-  createSession({ mode: "newdir", parent, dir, gitInit, model: selectedModel(), agent: selectedAgent() });
+  createSession({ mode: "newdir", parent, dir, gitInit, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
 }
 
 function renderList() {
@@ -653,7 +658,7 @@ function selectedModel() {
 }
 
 function launchRepo(r) {
-  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent() });
+  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
 }
 function launchResume(r) {
   const fork = document.getElementById("fork-chk").checked;
