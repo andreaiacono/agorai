@@ -177,6 +177,7 @@ type createReq struct {
 	Button  string            `json:"button"`  // button id from /api/buttons
 	Variant string            `json:"variant"` // chosen variant id (if the button has variants)
 	Inputs  map[string]string `json:"inputs"`  // input id → value
+	Prompt  string            `json:"prompt"`  // optional edited prompt (overrides the button's template; placeholders still filled)
 }
 
 // reviewCommentsSuffix is appended to both review prompts: after the analysis,
@@ -196,8 +197,10 @@ const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICK
 	"First, look up the ticket to understand its requirements and find the GitHub PR linked to it. " +
 	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET) and check out the PR's branch there with `gh pr checkout` (clone the repository into it first if needed). " +
 	"Then analyze the PR's changes against the ticket's requirements and give me a clear, actionable implementation plan: what the PR already covers, what is missing or incorrect, edge cases and tests to consider, and the concrete next steps with file paths. " +
+	"Also consider whether the feature should emit usage metrics so we can tell whether it's actually being used, and if so call that out in the plan. " +
 	"Treat the ticket description as the source of truth for the desired end state. " +
 	"NEVER commit or push without asking me to confirm first, and don't open PRs or post anything to GitHub/Linear — produce the plan here for me to review. " +
+	"Do NOT reference Linear ticket IDs (e.g. $TICKET) in code comments. " +
 	"Finally, if the `/lucid-adr` command (the lucid-adr skill) is available here, run it to archive the key decisions from this work; if it isn't available, skip this step."
 
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
@@ -321,6 +324,9 @@ func (s *Server) handleConfigLaunch(w http.ResponseWriter, req createReq, model 
 			return
 		}
 		inputs, prompt, sessionName = v.Inputs, v.Prompt, v.SessionName
+	}
+	if req.Prompt != "" {
+		prompt = req.Prompt // user edited the prompt in the modal; placeholders still get filled
 	}
 
 	vals := map[string]string{}

@@ -540,6 +540,12 @@ function renderConfigForm() {
     html += `<label class="field"><span class="field-label">${esc(inp.label || inp.id)}</span>
       <input class="cfg-input" data-id="${esc(inp.id)}" placeholder="${esc(inp.placeholder || "")}" autocomplete="off"></label>`;
   }
+  const prompt = (variant ? variant.prompt : b.prompt) || "";
+  if (prompt) {
+    const ph = inputs.map((i) => "{" + i.id + "}").join(" ");
+    html += `<label class="field"><span class="field-label">Prompt <small>${ph ? esc(ph + " is") : "placeholders are"} filled from the fields above — edit if needed</small></span>
+      <textarea class="cfg-prompt" rows="6">${esc(prompt)}</textarea></label>`;
+  }
   html += `<button class="review-go" onclick="launchConfig()">Start</button>`;
   form.innerHTML = html;
   const first = form.querySelector(".cfg-input");
@@ -556,7 +562,10 @@ function launchConfig() {
   for (const d of defs) {
     if (d.required && !inputs[d.id]) { alert((d.label || d.id) + " is required"); return; }
   }
-  createSession({ button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel() });
+  const promptEl = document.querySelector("#config-form .cfg-prompt");
+  const body = { button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel() };
+  if (promptEl) body.prompt = promptEl.value; // user-edited prompt (placeholders still filled server-side)
+  createSession(body);
 }
 
 function launchScratch() {
