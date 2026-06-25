@@ -236,21 +236,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .modal.config-mode .config-form { display: block; }
 .review-source { display: flex; gap: 18px; margin-bottom: 14px; }
 .review-source label { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
-.modal.config-mode .search, .modal.config-mode .repo-list,
-.modal.config-mode .newdir-toggle, .modal.config-mode .scratch-row { display: none; }
+.modal.config-mode .search, .modal.config-mode .repo-list { display: none; }
 .config-form .cfg-input, .config-form .cfg-prompt { width: 100%; box-sizing: border-box; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
 .config-form .cfg-input:focus, .config-form .cfg-prompt:focus { outline: none; border-color: var(--accent); }
 .config-form .cfg-prompt { resize: vertical; line-height: 1.4; }
 .field-hint { color: var(--dim); font-size: 11px; margin: -8px 0 14px; }
 .review-go { font: inherit; font-weight: 600; background: var(--accent); color: #06121f; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; margin-top: 4px; }
-/* new-directory toggle + form (open mode only) */
-.newdir-toggle { display: flex; align-items: center; gap: 7px; margin: 0 16px 10px; color: var(--dim); font-size: 11px; cursor: pointer; }
-.modal.wt-mode .newdir-toggle, .modal.resume-mode .newdir-toggle, .modal.review-mode .newdir-toggle, .modal.ticket-mode .newdir-toggle { display: none; }
-.scratch-row { margin: 0 16px 10px; }
-.modal.wt-mode .scratch-row, .modal.resume-mode .scratch-row, .modal.review-mode .scratch-row, .modal.newdir-mode .scratch-row, .modal.ticket-mode .scratch-row { display: none; }
-.scratch-btn { font: inherit; width: 100%; text-align: left; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
-.scratch-btn:hover { border-color: var(--accent); }
-.scratch-btn small { color: var(--dim); }
 
 /* prompt debug modal */
 .debug-modal { width: min(900px, 90vw); }
@@ -265,13 +256,19 @@ body.resizing { cursor: col-resize; user-select: none; }
 .debug-opt { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 1px 7px; margin: 0 4px 4px 0; }
 .debug-sess details summary { color: var(--dim); cursor: pointer; margin-top: 4px; }
 .debug-raw { white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; max-height: 30vh; overflow: auto; font-size: 11px; }
-.newdir-form { display: none; }
-.modal.newdir-mode .newdir-form { display: block; padding: 4px 16px 14px; }
-.modal.newdir-mode .search, .modal.newdir-mode .repo-list { display: none; }
-.newdir-git { display: flex; align-items: center; gap: 7px; color: var(--dim); font-size: 11px; margin: 8px 0 12px; cursor: pointer; }
-.newdir-git code { color: var(--text); }
-#newdir-parent, #newdir-name { width: 100%; box-sizing: border-box; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
-#newdir-parent:focus, #newdir-name:focus { outline: none; border-color: var(--accent); }
+/* folder chooser — the open-mode body: navigate to a checkout anywhere on disk */
+.browse-form { display: none; }
+/* flex column so the list scrolls and the Start button stays pinned inside the modal */
+.modal.open-mode .browse-form { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 4px 16px 14px; }
+.modal.open-mode .search, .modal.open-mode .repo-list { display: none; }
+.browse-bar { display: flex; gap: 6px; margin-bottom: 8px; }
+.browse-up { font: inherit; flex: 0 0 auto; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0 11px; cursor: pointer; }
+.browse-up:hover { border-color: var(--accent); }
+#browse-path { flex: 1; min-width: 0; box-sizing: border-box; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+#browse-path:focus { outline: none; border-color: var(--accent); }
+.browse-hidden { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: var(--dim); font-size: 11px; cursor: pointer; }
+.browse-list { flex: 1; min-height: 0; overflow-y: auto; margin-bottom: 10px; }
+.browse-form .review-go { flex: 0 0 auto; align-self: flex-start; }
 .resume-opts code { color: var(--text); }
 .repo .r-age { color: var(--dim); margin-left: auto; padding-left: 10px; }
 .repo-list { overflow-y: auto; padding: 4px 10px 12px; }

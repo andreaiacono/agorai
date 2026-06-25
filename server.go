@@ -37,6 +37,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/buttons", s.handleResetButtons)
 	mux.HandleFunc("GET /api/repos", s.handleRepos)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
+	mux.HandleFunc("GET /api/browse", s.handleBrowse)
 	mux.HandleFunc("GET /api/models", s.handleModels)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
@@ -130,6 +131,62 @@ func (s *Server) handleRoots(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, out)
 }
 
+// handleBrowse lists the sub-directories of a path so the picker can offer a
+// navigable folder chooser — for opening a repo that isn't under the configured
+// roots (e.g. a one-off PR checkout, each in its own directory). Read-only.
+func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
+	p := strings.TrimSpace(r.URL.Query().Get("path"))
+	if p == "" {
+		p = homeDir()
+	}
+	abs, err := filepath.Abs(expandHome(p))
+	if err != nil {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	abs = filepath.Clean(abs)
+	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+		http.Error(w, "not a directory", http.StatusBadRequest)
+		return
+	}
+
+	type dirent struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Repo bool   `json:"repo"`
+	}
+	showHidden := r.URL.Query().Get("hidden") == "1"
+	dirs := []dirent{}
+	entries, _ := os.ReadDir(abs)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if !showHidden && strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		full := filepath.Join(abs, e.Name())
+		dirs = append(dirs, dirent{Name: e.Name(), Path: full, Repo: isGitRepo(full)})
+	}
+
+	parent := filepath.Dir(abs)
+	if parent == abs {
+		parent = "" // already at the filesystem root
+	}
+	writeJSON(w, map[string]any{
+		"path":    abs,
+		"display": shortenHome(abs),
+		"parent":  parent,
+		"isRepo":  isGitRepo(abs),
+		"dirs":    dirs,
+	})
+}
+
+func isGitRepo(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
 // handleDebugPrompts dumps, for every session currently asking permission, what
 // the prompt parser sees — the parsed options plus the ANSI-stripped recent
 // output — so a mis-parse can be diagnosed without running the server here.
@@ -196,13 +253,14 @@ const reviewPRPrompt = "Please spawn the reviewers for GitHub PR $PR. If $PR is 
 // in the repo the user picks ({dir} is the picked directory's name).
 const reviewMinePrompt = "Please spawn the reviewers to review my local changes in this repository (`{dir}`). There is no PR yet — review the diff between the current branch and its base/source branch. Determine the base branch (the repository's default branch such as `main`, or the branch this one was created from — `git merge-base` / `git log` can help) and review the committed changes (`git diff <base>...HEAD`) together with any uncommitted working-tree changes (`git status`, `git diff`). Use `git` and `gh` read-only — do NOT checkout other branches, edit files, commit, push, or post anything to GitHub or Linear; NEVER commit or push without asking me to confirm first. Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
 
-// ticketPlanPromptTemplate is the initial prompt for a "session for ticket":
-// Claude finds the ticket's PR, checks it out under the PRs workspace, and
-// produces an implementation plan. $TICKET and $DIR are filled in at spawn time.
-const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICKET. " +
-	"First, look up the ticket to understand its requirements and find the GitHub PR linked to it. " +
-	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET) and check out the PR's branch there with `gh pr checkout` (clone the repository into it first if needed). " +
-	"Then analyze the PR's changes against the ticket's requirements and give me a clear, actionable implementation plan: what the PR already covers, what is missing or incorrect, edge cases and tests to consider, and the concrete next steps with file paths. " +
+// ticketPlanPromptTemplate is the initial prompt for the "New PR" button: there
+// is no PR yet — Claude looks up the ticket, sets up a fresh checkout + branch
+// under the PRs workspace, and produces an implementation plan for the new work.
+// $TICKET and $DIR are filled in at spawn time.
+const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICKET. There is no PR for it yet — this is new work. " +
+	"First, look up the ticket to understand its requirements. " +
+	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET), check out the repository it targets there (for Light work that's `light-space/light`; clone it first if needed), and create a new git branch for this ticket off the default branch. " +
+	"Then give me a clear, actionable implementation plan for building it: the approach, the files to change, edge cases and tests to consider, and the concrete steps in order. " +
 	"Also consider whether the feature should emit usage metrics so we can tell whether it's actually being used, and if so call that out in the plan. " +
 	"Treat the ticket description as the source of truth for the desired end state. " +
 	"NEVER commit or push without asking me to confirm first, and don't open PRs or post anything to GitHub/Linear — produce the plan here for me to review. " +
@@ -484,6 +542,21 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 		s.startPicked(w, req, model, cwd, dir, branch)
+		return
+	}
+
+	// Browse: an existing directory the user navigated to with the folder chooser.
+	// They picked it explicitly in the UI, so it's allowed even outside the
+	// configured roots (every PR checkout lives in its own directory) — but it
+	// must exist and be a real directory.
+	if req.Mode == "browse" {
+		cwd := filepath.Clean(expandHome(strings.TrimSpace(req.Cwd)))
+		if fi, err := os.Stat(cwd); err != nil || !fi.IsDir() {
+			http.Error(w, "not a directory", http.StatusBadRequest)
+			return
+		}
+		branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+		s.startPicked(w, req, model, cwd, filepath.Base(cwd), branch)
 		return
 	}
 

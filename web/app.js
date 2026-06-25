@@ -415,9 +415,8 @@ function disposeStaleTerminals() {
 
 /* ---------- new-session modal ---------- */
 
-let repos = [];          // from /api/repos        (open + worktree modes)
+let repos = [];          // from /api/repos        (worktree mode)
 let resumables = [];     // from /api/resumable    (resume mode)
-let roots = [];          // from /api/roots        (newdir parent options)
 let mode = "open";
 const overlay = document.getElementById("overlay");
 
@@ -432,13 +431,10 @@ async function openModal(initialMode = "open", btn = null) {
   document.querySelector(".model-row").style.display = "";
   populateAgentOptions(btn ? btn.agents : null);
   resumables = []; // refetched when the Resume tab is opened
-  repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []);
-  roots = await fetch("/api/roots").then((r) => r.json()).catch(() => []);
-  document.getElementById("newdir-parent").innerHTML =
-    roots.map((r) => `<option value="${esc(r.path)}">${esc(r.display)}</option>`).join("");
+  repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []); // for worktree mode
   await setMode(initialMode); // selects the tab + renders the matching list
   if (btn && btn.label) document.getElementById("modal-title").textContent = btn.label; // after setMode (which sets a default)
-  document.getElementById("search").focus();
+  document.getElementById(initialMode === "open" ? "browse-path" : "search").focus();
 }
 function closeModal() { overlay.classList.remove("open"); }
 
@@ -457,20 +453,24 @@ async function setMode(m) {
   modal.classList.remove("config-mode");
   modal.classList.toggle("wt-mode", m === "worktree");
   modal.classList.toggle("resume-mode", m === "resume");
+  modal.classList.toggle("open-mode", m === "open"); // open mode = the folder chooser
   // The agent choice applies everywhere except the unused worktree mode. Refresh
   // the model list so it matches the agent that will actually run.
   if (m === "worktree") document.getElementById("agent-sel").value = "claude";
   await populateModels();
-  // reset the new-directory sub-state whenever the mode changes
-  modal.classList.remove("newdir-mode");
-  document.getElementById("newdir-chk").checked = false;
-  document.getElementById("newdir-name").value = "";
   document.getElementById("search").placeholder = m === "resume" ? "Filter past sessions…" : "Filter repos…";
 
   if (m === "resume") {
     resumables = await fetchResumables(); // for the currently selected agent
+    renderList();
+  } else if (m === "open") {
+    // Open mode is a folder chooser starting at the home directory — no list of
+    // pre-discovered repos; navigate to whatever checkout you want to open.
+    document.getElementById("browse-hidden").checked = false;
+    await browseGo("");
+  } else {
+    renderList();
   }
-  renderList();
 }
 
 // Resumable sessions are per-agent (claude transcripts vs codex rollouts).
@@ -498,7 +498,7 @@ async function openConfig(b) {
   mode = "config";
   overlay.classList.add("open");
   const modal = document.getElementById("modal");
-  ["wt-mode", "resume-mode", "review-mode", "ticket-mode", "newdir-mode"].forEach((c) => modal.classList.remove(c));
+  ["wt-mode", "resume-mode", "review-mode", "ticket-mode", "open-mode"].forEach((c) => modal.classList.remove(c));
   modal.classList.add("config-mode");
   document.getElementById("modal-title").textContent = b.label;
   populateAgentOptions(b.agents);
@@ -575,23 +575,58 @@ function launchConfig() {
   createSession(body);
 }
 
-function launchScratch() {
-  createSession({ mode: "scratch", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
+/* ---------- folder chooser (open a checkout anywhere on disk) ---------- */
+
+let browsePath = "";   // the folder currently shown / to be opened
+let browseParent = ""; // its parent ("" at the filesystem root)
+
+function browseRefresh() { browseGo(browsePath); } // re-list current folder (e.g. after toggling hidden)
+
+async function browseGo(path) {
+  const hidden = document.getElementById("browse-hidden").checked ? "&hidden=1" : "";
+  const data = await fetch("/api/browse?path=" + encodeURIComponent((path || "").trim()) + hidden)
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!data) {
+    document.getElementById("browse-list").innerHTML = `<div class="group-label">can't open that folder</div>`;
+    return;
+  }
+  browsePath = data.path;
+  browseParent = data.parent;
+  document.getElementById("browse-path").value = data.path;
+  renderBrowse(data);
 }
 
-function toggleNewDir() {
-  const on = document.getElementById("newdir-chk").checked;
-  document.getElementById("modal").classList.toggle("newdir-mode", on);
-  if (on) document.getElementById("newdir-name").focus();
+function browseUp() { if (browseParent) browseGo(browseParent); }
+
+function renderBrowse(data) {
+  const list = document.getElementById("browse-list");
+  list.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "group-label";
+  head.textContent = data.display + (data.isRepo ? "  ·  git repo (start here ↓)" : "");
+  list.appendChild(head);
+  if (!data.dirs.length) {
+    const none = document.createElement("div");
+    none.className = "group-label";
+    none.textContent = "no sub-folders";
+    list.appendChild(none);
+  }
+  for (const d of data.dirs) {
+    const el = document.createElement("div");
+    el.className = "repo";
+    el.onclick = () => browseGo(d.path);
+    el.innerHTML = `
+      <span class="ico">${d.repo ? "▸" : "📁"}</span>
+      <span class="info"><div class="r-name">${esc(d.name)}</div></span>
+      <span class="go">›</span>`;
+    list.appendChild(el);
+  }
 }
 
-function launchNewDir() {
-  const parent = document.getElementById("newdir-parent").value;
-  const dir = document.getElementById("newdir-name").value.trim();
-  const gitInit = document.getElementById("newdir-git").checked;
-  if (!parent) { alert("Choose a parent folder."); return; }
-  if (!dir) { alert("Enter a folder name."); return; }
-  createSession({ mode: "newdir", parent, dir, gitInit, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
+function launchBrowse() {
+  const path = document.getElementById("browse-path").value.trim() || browsePath;
+  if (!path) { alert("Choose a folder."); return; }
+  createSession({ cwd: path, mode: "browse", name: "", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
 }
 
 function renderList() {

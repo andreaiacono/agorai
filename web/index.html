@@ -69,15 +69,15 @@
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
       <div class="agent-row"><span>Agent</span><select id="agent-sel" onchange="onAgentChange()"><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option></select></div>
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
-      <label class="newdir-toggle"><input type="checkbox" id="newdir-chk" onchange="toggleNewDir()"> Create a new directory for this session</label>
-      <div class="scratch-row"><button type="button" class="scratch-btn" onclick="launchScratch()">▷ Start without a repo <small>· runs in ~/.agorai/scratch</small></button></div>
-      <div class="newdir-form">
-        <label class="field"><span class="field-label">Parent folder</span>
-          <select id="newdir-parent"></select></label>
-        <label class="field"><span class="field-label">New folder name</span>
-          <input id="newdir-name" placeholder="my-project" autocomplete="off"></label>
-        <label class="newdir-git"><input type="checkbox" id="newdir-git" checked> Initialise as a git repo (<code>git init</code>)</label>
-        <button class="review-go" onclick="launchNewDir()">Create &amp; start</button>
+      <div class="browse-form">
+        <div class="browse-bar">
+          <button type="button" class="browse-up" onclick="browseUp()" title="Parent folder">↑</button>
+          <input id="browse-path" placeholder="/path/to/folder" autocomplete="off"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();browseGo(this.value);}">
+        </div>
+        <label class="browse-hidden"><input type="checkbox" id="browse-hidden" onchange="browseRefresh()"> Show hidden folders</label>
+        <div class="browse-list" id="browse-list"></div>
+        <button class="review-go" onclick="launchBrowse()">▷ Start in this folder</button>
       </div>
       <div class="wt-note">A fresh git worktree + branch is created so this session can edit in parallel without touching your other checkouts.</div>
       <div class="resume-note">Re-opens a past session with its full history in a hosted terminal. Don't run the same session in two places at once.</div>
