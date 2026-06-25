@@ -3,31 +3,36 @@
 A tiny local dashboard for juggling several **Claude Code**, **OpenAI Codex**,
 and **Gemini CLI** sessions at once.
 
-- **Left panel** — every session with its state and a one-line recap. The dot +
-  name are colour-coded so you can triage at a glance, and **blink** until you
-  look:
+- **Left panel** — every session with its state and a one-line recap. A
+  **per-agent icon** marks each row and the **name** is colour-coded so you can
+  triage at a glance, **blinking** until you look:
   - 🔴 **red** — a permission prompt is waiting for your answer
   - 🟢 **green** — it finished its turn / wants input and you haven't checked it yet
   - 🟡 **amber** (steady) — busy working, no action needed
-  - ⚪ **grey** — idle and seen, or ended
+  - ⚪ **grey** — idle and seen (an **ended** session's name is dimmed)
 - **Right panel** — the focused session's live terminal (xterm.js). Clicking a
   session focuses the terminal so you can start typing immediately.
-- **+ New Session** — pick the **agent** (Claude / Codex / Gemini), then pick a
-  repo (discovered under your roots), create a **new directory** for it, or
-  **start without a repo** (runs in a dedicated `~/.agorai/scratch` workspace).
-  A per-agent icon marks each session in the list.
-- **New PR** — give it a Linear ticket (a bare number is prefixed with `BLUE-`);
-  Claude checks out the ticket's PR under `~/dev/PRs/<ticket>` and produces an
-  implementation plan.
-- **Review PR** — review a PR by Linear ticket or by GitHub PR reference. Runs
-  read-only (no checkout/commits/comments) in a contained workspace.
+- **+ New Session** — choose the **agent** as a radio (Claude / Codex / Gemini —
+  nothing is pre-selected, so you pick deliberately), then a **folder chooser**
+  opens at your home directory: navigate to any checkout on disk and start there.
+  A **Show hidden folders** toggle reveals dot-directories.
+- **New PR** — give it a Linear ticket (a bare number is prefixed with `BLUE-`).
+  There's no PR yet, so the agent sets up a **fresh checkout + branch** under
+  `~/dev/PRs/<ticket>` and produces an implementation plan for the new work.
+- **Review PR** — review an existing GitHub PR by number (a bare number assumes
+  `light-space/light`) or URL. It reads the linked Linear ticket for context and
+  runs **read-only** (no checkout/commits/comments) in a contained workspace.
+- **Review my code** — review your **local** working branch before a PR exists:
+  the diff of the current branch against its base (committed *and* uncommitted
+  changes), with the Linear ticket recovered from the branch name / commit-message
+  prefixes for context. Pick the checkout with the folder chooser; read-only.
 - **Resume** — re-open a past session (discovered from `~/.claude/projects`
   transcripts) as a hosted, interactive terminal via `claude --resume`. The
   picker lists each session's first prompt, last reply, and age.
-- **Model picker** — choose the cloud **model** (Opus / Sonnet / Haiku, or your
-  default) and optionally pin a **version**; the model actually running (resolved
-  from the transcript, even behind "default") shows as a chip beside the session
-  and is remembered across restarts.
+- **Model picker** — choose the cloud **model** (Opus / Sonnet / Haiku / Fable,
+  or your default) and optionally pin a **version**; the model actually running
+  (resolved from the transcript, even behind "default") shows as a chip beside the
+  session and is remembered across restarts.
 - **Yes / No / Always** buttons answer a permission prompt without switching to
   that session; an **ⓘ** icon carries the full command/context as a tooltip.
 - **🔊** (top-right) toggles alert sounds — a tone when a session needs
@@ -38,15 +43,16 @@ and **Gemini CLI** sessions at once.
   **environment variables** passed to `claude` at launch (e.g. a `DATABASE_URL`).
   Saved to `~/.agorai/config.json` (mode `0600`, since env may hold secrets).
 
-It's a single Go binary: one process hosts each `claude` (or `codex`) in a PTY,
-bridges it to the browser over a WebSocket, and learns when a session needs you.
+It's a single Go binary: one process hosts each agent (`claude`, `codex`, or
+`gemini`) in a PTY, bridges it to the browser over a WebSocket, and learns when a
+session needs you.
 The web assets are embedded, so it cross-compiles to a single file you can hand
 to a colleague.
 
 ## Codex sessions
 
-Pick **Codex** in the New-Session agent dropdown to host an OpenAI `codex` TUI
-instead of `claude`. A few differences, handled automatically:
+Pick **Codex** in the agent radio to host an OpenAI `codex` TUI instead of
+`claude`. A few differences, handled automatically:
 
 - **No hooks.** Codex has no hook system, so agorai instead tails Codex's
   session **rollout** file (`~/.codex/sessions/.../rollout-*.jsonl`) to know the
@@ -61,21 +67,36 @@ instead of `claude`. A few differences, handled automatically:
   so Codex doesn't prompt.
 - Codex runs with `--no-alt-screen` so its scrollback survives agorai's replay.
 
+## Gemini sessions
+
+Pick **Gemini** to host the `gemini` CLI. It uses the same Claude-compatible hook
+*format* but Gemini's own event *names* — `BeforeAgent`/`AfterAgent` for the turn
+boundaries (≈ Claude's `UserPromptSubmit`/`Stop`), plus `SessionStart` /
+`Notification` / `SessionEnd`. So:
+
+- `agorai install` also wires `~/.gemini/settings.json` (only if `~/.gemini`
+  exists), and a spawned Gemini session **self-heals** its hook entries on launch.
+- Recaps are read from Gemini's chat JSONL (`~/.gemini/tmp/.../chats/*.jsonl`).
+- Session ids are assigned by agorai up front (`--session-id`), like Claude, so
+  persistence + auto-resume work the same way.
+
 ## Custom buttons (`~/.agorai/buttons.json`)
 
 The top-bar launch buttons are **config-driven**. Built-in defaults ship the
-**New Session / New PR / Review PR / Resume** buttons; drop a `~/.agorai/buttons.json`
-to replace them (and add your own). It's served at `GET /api/buttons` and the
-UI renders the top bar + each modal from it.
+**New Session / New PR / Review PR / Review my code / Resume** buttons; drop a
+`~/.agorai/buttons.json` to replace them (and add your own). It's served at
+`GET /api/buttons` and the UI renders the top bar + each modal from it. The **▦**
+button (top-right) opens a **visual manager** to create/edit/delete buttons
+without hand-editing JSON; **Reset to defaults** drops the file.
 
 A button:
 
 ```jsonc
 {
   "id": "tests", "label": "Write tests", "icon": "plus",
-  "agents": ["claude", "codex", "gemini"],   // dropdown options (omit = all)
+  "agents": ["claude", "codex", "gemini"],   // agent radio options (omit = all)
   "showModel": true,
-  "workspace": { "pick": true },             // show the repo/dir picker …
+  "workspace": { "pick": true },             // show the folder chooser …
   // … or  { "dir": "~/dev/PRs", "trust": true }   (fixed dir)
   // … or  { "scratch": "review" }                  (~/.agorai/<name>)
   "inputs": [                                // text fields (prompt buttons)
@@ -89,12 +110,17 @@ A button:
 }
 ```
 
-- **`variants`** — a radio that swaps inputs + prompt + name (e.g. Review's
-  ticket-vs-PR toggle); same fields as a button.
-- **`workspace.pick`** shows the repo/new-dir/scratch picker; a pick button may
-  still carry a `prompt`/`sessionName` (filled with `{workspace}`/`{dir}`).
-- Adding/changing a button is just a JSON edit — no rebuild. **Resume** stays a
-  built-in special (it lists past sessions rather than taking inputs).
+- **`variants`** — a radio that swaps inputs + prompt + name (for a button that
+  offers a couple of modes); same fields as a button.
+- **`workspace.pick`** shows the **folder chooser**; a pick button may still carry
+  a `prompt`/`sessionName` (filled with `{workspace}` = the chosen path, `{dir}` =
+  its folder name).
+- **Editable prompt** — any button with a `prompt` shows it in a textarea in the
+  modal, with a hint listing each placeholder's source, so you can tweak it before
+  launching (placeholders are still filled in).
+- Adding/changing a button is just a JSON edit (or the ▦ manager) — no rebuild.
+  **Resume** stays a built-in special (it lists past sessions rather than taking
+  inputs).
 
 ## Run
 
@@ -103,9 +129,10 @@ make tidy      # first time: resolve deps (needs network; writes go.sum)
 make run       # starts on http://127.0.0.1:7777
 ```
 
-Then open <http://127.0.0.1:7777>. By default the New-Session picker lists a few
-specific repos (see `defaultRoots` in `main.go`). Point it at different roots —
-a root may be a repo itself or a tree to scan (up to 3 levels deep) for repos:
+Then open <http://127.0.0.1:7777>. The New-Session picker is a **folder chooser**
+that opens at your home directory, so you can start a session in any checkout. The
+`-roots` flag still scopes repo auto-discovery and the cwd guard used by the other
+flows (a root may be a repo itself or a tree scanned up to 3 levels deep):
 
 ```
 go run . -roots ~/dev,~/work,~/src
@@ -125,8 +152,10 @@ agorai install
 
 This writes `~/.claude/hooks/agorai.sh` and merges the hook entries into
 `~/.claude/settings.json` (it backs up the original to `settings.json.agorai.bak`,
-merges rather than overwrites, and is safe to re-run). Restart any running
-sessions afterward so they pick up the hook.
+merges rather than overwrites, and is safe to re-run). It also wires
+`~/.gemini/settings.json` with Gemini's event names when `~/.gemini` exists;
+**Codex needs no hooks**. Restart any running sessions afterward so they pick up
+the hook.
 
 **Or do it manually:**
 
@@ -203,10 +232,10 @@ hooks configured as above.
   xterm instance is kept per session to preserve scrollback when switching; if
   you run many sessions, drop background terminals and replay from the
   server-side ring buffer instead.
-- **Security** — binds to `127.0.0.1` only and validates that a client-supplied
-  `cwd` is under an allowed root (Review / New-PR / scratch sessions instead run
-  in fixed server-chosen workspaces under `~/.agorai` or `~/dev/PRs`). Don't
-  expose the port without adding auth.
+- **Security** — binds to `127.0.0.1` only. The New-Session **folder chooser**
+  lets you open any existing directory you navigate to; the other flows (Review /
+  New-PR) run in fixed server-chosen workspaces under `~/.agorai` or `~/dev/PRs`.
+  It's a single-user localhost tool — don't expose the port without adding auth.
 - **Offline / vendoring** — `index.html` loads xterm.js from a CDN. For a truly
   offline single-binary build, download `xterm.min.js`, `xterm.min.css`,
   `addon-fit.min.js`, and `addon-search.min.js` into `web/` and point the tags at
