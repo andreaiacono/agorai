@@ -542,8 +542,15 @@ function renderConfigForm() {
   }
   const prompt = (variant ? variant.prompt : b.prompt) || "";
   if (prompt) {
-    const ph = inputs.map((i) => "{" + i.id + "}").join(" ");
-    html += `<label class="field"><span class="field-label">Prompt <small>${ph ? esc(ph + " is") : "placeholders are"} filled from the fields above — edit if needed</small></span>
+    // Explain each placeholder that appears in the prompt, and where its value comes from.
+    const ws = b.workspace || {};
+    const wsDesc = ws.dir || (ws.scratch ? "~/.agorai/" + ws.scratch : (ws.pick ? "the directory you pick" : "the working directory"));
+    const ph = [];
+    for (const i of inputs) if (prompt.includes("{" + i.id + "}")) ph.push(`{${i.id}} → the ${i.label || i.id} field above`);
+    if (prompt.includes("{workspace}")) ph.push(`{workspace} → ${wsDesc}`);
+    if (prompt.includes("{dir}")) ph.push(`{dir} → that directory's name`);
+    const hint = ph.length ? "Placeholders — " + ph.join("; ") : "filled in before launch";
+    html += `<label class="field"><span class="field-label">Prompt <small>${esc(hint)} · edit if needed</small></span>
       <textarea class="cfg-prompt" rows="6">${esc(prompt)}</textarea></label>`;
   }
   html += `<button class="review-go" onclick="launchConfig()">Start</button>`;
