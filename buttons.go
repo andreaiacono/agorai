@@ -79,6 +79,13 @@ func defaultButtons() []Button {
 			SessionName: "Review {pr}",
 		},
 		{
+			ID: "review-mine", Label: "Review My PR", Icon: "review", Mode: "open",
+			Agents: allAgents, ShowModel: true, Unattended: true, ExcludeEnv: []string{"DATABASE_URL"},
+			Workspace:   &ButtonWorkspace{Pick: true}, // pick the local checkout to review
+			Prompt:      reviewMinePrompt,
+			SessionName: "Review {dir}",
+		},
+		{
 			ID: "resume", Label: "Resume Session", Icon: "resume", Mode: "resume",
 		},
 	}

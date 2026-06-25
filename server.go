@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,6 +190,11 @@ const reviewCommentsSuffix = " Then, at the very end, add a section titled \"Pro
 // default repo; the linked Linear ticket is pulled from the PR description for
 // extra context.
 const reviewPRPrompt = "Please spawn the reviewers for GitHub PR $PR. If $PR is only a number, assume the repository is `light-space/light`. First read the PR description (e.g. `gh pr view $PR --json body,title,url`) and find the Linear ticket it references; use that ticket's description as additional context for the review. Work only with read-only `gh` commands (`gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: NEVER commit or push without asking me to confirm first, and no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
+
+// reviewMinePrompt reviews the user's *local* working branch (no PR yet): the
+// diff of the current branch against its base branch, computed via git/gh. Runs
+// in the repo the user picks ({dir} is the picked directory's name).
+const reviewMinePrompt = "Please spawn the reviewers to review my local changes in this repository (`{dir}`). There is no PR yet — review the diff between the current branch and its base/source branch. Determine the base branch (the repository's default branch such as `main`, or the branch this one was created from — `git merge-base` / `git log` can help) and review the committed changes (`git diff <base>...HEAD`) together with any uncommitted working-tree changes (`git status`, `git diff`). Use `git` and `gh` read-only — do NOT checkout other branches, edit files, commit, push, or post anything to GitHub or Linear; NEVER commit or push without asking me to confirm first. Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
 
 // ticketPlanPromptTemplate is the initial prompt for a "session for ticket":
 // Claude finds the ticket's PR, checks it out under the PRs workspace, and
@@ -837,7 +843,7 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 		//  - a lone Esc into a working session = interrupting the turn → idle
 		//    (claude fires no Stop hook on interrupt, so we'd stay stuck "working")
 		switch st := sess.currentState(); {
-		case st == StatePerm || st == StateWaiting:
+		case (st == StatePerm || st == StateWaiting) && looksTyped(data):
 			sess.setState(StateWorking, "Working…")
 			s.broadcastSessions()
 		case st == StateWorking && isEscInterrupt(data):
@@ -853,6 +859,20 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 // we require the frame to be exactly one ESC byte to avoid false positives.
 func isEscInterrupt(data []byte) bool {
 	return len(data) == 1 && data[0] == 0x1b
+}
+
+// termReportRe matches the report sequences a terminal sends in reply to the
+// app's queries — cursor-position (…R), device-attributes (…c), device-status
+// (…n), and focus in/out (…I / …O). When agorai forces a repaint on attach,
+// xterm answers Claude's queries through the same input channel; those replies
+// must NOT be mistaken for the user typing.
+var termReportRe = regexp.MustCompile("\x1b\\[[0-9;?>=]*[RcnIO]")
+
+// looksTyped reports whether a PTY input frame contains a genuine keystroke
+// (anything left once terminal report sequences are stripped) rather than only
+// auto-generated terminal replies.
+func looksTyped(data []byte) bool {
+	return len(termReportRe.ReplaceAll(data, nil)) > 0
 }
 
 // ---- control WebSocket (shared: state out, commands in) ----

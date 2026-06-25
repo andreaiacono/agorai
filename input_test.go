@@ -1,0 +1,24 @@
+package main
+
+import "testing"
+
+func TestLooksTyped(t *testing.T) {
+	cases := map[string]bool{
+		"y":                 true,  // a keystroke
+		"\r":                true,  // Enter
+		"3\r":               true,  // answer a numbered prompt
+		"\x1b[A":            true,  // arrow key (user navigation)
+		"\x1b[12;34R":       false, // cursor-position report (terminal reply)
+		"\x1b[?62;1;6c":     false, // primary device attributes
+		"\x1b[0n":           false, // device status report
+		"\x1b[I":            false, // focus-in report
+		"\x1b[O":            false, // focus-out report
+		"\x1b[6n\x1b[?1;2c": false, // multiple replies, nothing typed
+		"\x1b[12;1Ry":       true,  // a report plus a real keystroke
+	}
+	for in, want := range cases {
+		if got := looksTyped([]byte(in)); got != want {
+			t.Errorf("looksTyped(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
