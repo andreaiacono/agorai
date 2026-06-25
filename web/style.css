@@ -226,6 +226,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .modal.wt-mode .agent-row { display: none; }
 .model-row select:focus { outline: none; border-color: var(--accent); }
 .model-row select:disabled { opacity: 0.45; cursor: not-allowed; }
+.agent-opts { display: flex; gap: 14px; }
+.agent-opt { display: flex; align-items: center; gap: 5px; color: var(--text); cursor: pointer; }
+.agent-opt input { cursor: pointer; margin: 0; }
 .wt-note, .resume-note { display: none; margin: 0 16px 12px; padding: 8px 10px; background: rgba(74,163,255,.08); border: 1px solid rgba(74,163,255,.25); border-radius: 6px; color: var(--dim); font-size: 11px; }
 .modal.wt-mode .wt-note { display: block; }
 .modal.resume-mode .resume-note { display: block; }

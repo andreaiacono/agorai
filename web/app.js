@@ -456,7 +456,7 @@ async function setMode(m) {
   modal.classList.toggle("open-mode", m === "open"); // open mode = the folder chooser
   // The agent choice applies everywhere except the unused worktree mode. Refresh
   // the model list so it matches the agent that will actually run.
-  if (m === "worktree") document.getElementById("agent-sel").value = "claude";
+  if (m === "worktree") setAgent("claude");
   await populateModels();
   document.getElementById("search").placeholder = m === "resume" ? "Filter past sessions…" : "Filter repos…";
 
@@ -507,14 +507,23 @@ async function openConfig(b) {
   renderConfigForm();
 }
 
-// Fill the agent dropdown with the button's allowed agents (all if unspecified).
+// Render the button's allowed agents (all if unspecified) as radio buttons.
 function populateAgentOptions(agents) {
   const list = (agents && agents.length) ? agents : Object.keys(AGENT_NAMES);
-  const sel = document.getElementById("agent-sel");
-  const prev = sel.value;
-  sel.innerHTML = list.map((a) => `<option value="${esc(a)}">${esc(AGENT_NAMES[a] || a)}</option>`).join("");
-  if (list.includes(prev)) sel.value = prev;
+  const prev = selectedAgent(); // keep the prior pick if it's still allowed
+  document.getElementById("agent-opts").innerHTML = list.map((a) =>
+    `<label class="agent-opt"><input type="radio" name="agent" value="${esc(a)}" onchange="onAgentChange()"> ${esc(AGENT_NAMES[a] || a)}</label>`
+  ).join("");
+  // No default selection — the user picks deliberately. Only exception: when a
+  // single agent is allowed, select it (and hide the row) so launch isn't blocked.
+  if (list.length === 1) setAgent(list[0]);
+  else if (list.includes(prev)) setAgent(prev);
   document.querySelector(".agent-row").style.display = list.length > 1 ? "" : "none";
+}
+
+function setAgent(a) {
+  const el = document.querySelector(`input[name="agent"][value="${a}"]`);
+  if (el) el.checked = true;
 }
 
 function activeVariant() {
@@ -675,14 +684,25 @@ function renderList() {
 
 let modelList = [];
 function selectedAgent() {
-  return document.getElementById("agent-sel").value || "claude";
+  return document.querySelector('input[name="agent"]:checked')?.value || ""; // "" = nothing picked
 }
 async function populateModels() {
-  // Models are per-agent, so (re)fetch for the currently selected agent.
-  modelList = await fetch("/api/models?agent=" + encodeURIComponent(selectedAgent()))
+  // Models are per-agent. Until an agent is picked there's nothing to list.
+  const agent = selectedAgent();
+  const sel = document.getElementById("model-sel");
+  const ver = document.getElementById("model-ver");
+  if (!agent) {
+    modelList = [];
+    sel.innerHTML = `<option value="">— pick an agent —</option>`;
+    sel.disabled = true;
+    ver.innerHTML = `<option value="">latest</option>`;
+    ver.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  modelList = await fetch("/api/models?agent=" + encodeURIComponent(agent))
     .then((r) => r.json()).catch(() => []);
-  document.getElementById("model-sel").innerHTML =
-    modelList.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
+  sel.innerHTML = modelList.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
   onModelChange();
 }
 async function onAgentChange() {
@@ -715,6 +735,7 @@ function launchResume(r) {
 }
 
 async function createSession(body) {
+  if (!body.agent) { alert("Pick an agent first."); return; } // no default — choose deliberately
   closeModal();
   const res = await fetch("/api/sessions", {
     method: "POST",

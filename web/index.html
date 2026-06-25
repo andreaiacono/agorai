@@ -67,7 +67,7 @@
     <div class="modal" id="modal">
       <h2 id="modal-title">New <span>session</span></h2>
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
-      <div class="agent-row"><span>Agent</span><select id="agent-sel" onchange="onAgentChange()"><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option></select></div>
+      <div class="agent-row"><span>Agent</span><div class="agent-opts" id="agent-opts"></div></div>
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
       <div class="browse-form">
         <div class="browse-bar">
