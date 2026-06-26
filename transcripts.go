@@ -86,6 +86,11 @@ type transcriptMessage struct {
 	Role    string          `json:"role"`
 	Model   string          `json:"model"`
 	Content json.RawMessage `json:"content"`
+	Usage   struct {
+		InputTokens         int `json:"input_tokens"`
+		CacheCreationTokens int `json:"cache_creation_input_tokens"`
+		CacheReadTokens     int `json:"cache_read_input_tokens"`
+	} `json:"usage"`
 }
 
 func parseTranscript(path string, mod time.Time) (Resumable, bool) {
@@ -217,6 +222,60 @@ func lastAssistantInfo(path string) (string, string) {
 		}
 	}
 	return truncate(oneLine(last), 90), model
+}
+
+// claudeContextTokens returns the live context-window size from the latest
+// assistant turn's usage (input + cache-read + cache-creation) in the transcript,
+// read from the tail so it stays cheap on long sessions. 0 if unknown. This is
+// the "context fill" the panel shows — there is no account-level quota readable
+// from disk (rate-limit state lives only in ephemeral API response headers).
+func claudeContextTokens(path string) int {
+	ctx := 0
+	for _, line := range tailLines(path, 256*1024) {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var e transcriptEntry
+		if json.Unmarshal([]byte(line), &e) != nil || len(e.Message) == 0 {
+			continue
+		}
+		var m transcriptMessage
+		if json.Unmarshal(e.Message, &m) != nil {
+			continue
+		}
+		role := m.Role
+		if role == "" {
+			role = e.Type
+		}
+		if role == "assistant" {
+			if t := m.Usage.InputTokens + m.Usage.CacheReadTokens + m.Usage.CacheCreationTokens; t > 0 {
+				ctx = t // keep the most recent assistant turn's context size
+			}
+		}
+	}
+	return ctx
+}
+
+// contextWindowMax returns the smallest standard context ceiling that fits the
+// observed token count: 200k for normal models, 1M for the large-context ones.
+// Adaptive so we need no exact per-model table and never report over 100%.
+// (Codex carries its exact model_context_window, so it doesn't need this.)
+func contextWindowMax(tokens int) int {
+	switch {
+	case tokens <= 0:
+		return 0
+	case tokens > 200_000:
+		return 1_000_000
+	default:
+		return 200_000
+	}
+}
+
+// claudeContextOf returns (tokens, ceiling) for the latest claude turn — the pair
+// the session stores for its gauge. Both 0 when the transcript has no usage yet.
+func claudeContextOf(path string) (int, int) {
+	t := claudeContextTokens(path)
+	return t, contextWindowMax(t)
 }
 
 // extractText pulls plain text out of a message's content, which may be a raw

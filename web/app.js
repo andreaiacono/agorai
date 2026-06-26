@@ -84,6 +84,7 @@ function renderSessions() {
   for (const s of orderedSessions()) {
     list.appendChild(sessionCard(s));
   }
+  updateTermHead(); // keep the focused session's context readout current
   disposeStaleTerminals();
   // "needs attention" = a pending permission, or anything that wants you and
   // hasn't been looked at yet (unread).
@@ -115,6 +116,35 @@ function agentIcon(agent) {
   return `<span class="agent-ic" title="${AGENT_NAMES[a]}">${AGENT_ICONS[a]}</span>`;
 }
 
+// Context-window gauge (claude). The server sends ctxTokens (live turn size) and
+// ctxMax (model ceiling); 0/absent → no gauge (codex/gemini, or no data yet).
+function ctxPct(s) {
+  return s.ctxTokens && s.ctxMax ? Math.min(100, Math.round((s.ctxTokens / s.ctxMax) * 100)) : 0;
+}
+function ctxLevel(pct) { return pct >= 85 ? "hi" : pct >= 60 ? "mid" : "lo"; }
+function fmtTokens(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n); }
+function ctxBar(s) {
+  if (!s.ctxTokens || !s.ctxMax) return "";
+  const pct = ctxPct(s);
+  return `<div class="ctxbar" title="Context ${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} (${pct}%)">` +
+    `<span class="${ctxLevel(pct)}" style="width:${pct}%"></span></div>`;
+}
+function ctxReadout(s) {
+  if (!s.ctxTokens || !s.ctxMax) return "";
+  const pct = ctxPct(s);
+  return ` · <span class="ctx-read ${ctxLevel(pct)}">${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} ctx · ${pct}%</span>`;
+}
+
+// Refresh the focused session's header (name/cwd/model + live context readout).
+// Called on select and on every render so the readout tracks each turn.
+function updateTermHead() {
+  const s = state.sessions.find((x) => x.id === state.selected);
+  if (!s) return;
+  document.getElementById("t-name").textContent = s.name;
+  document.getElementById("t-cwd").textContent = s.cwd + " · " + s.branch;
+  document.getElementById("t-right").innerHTML = "Model: " + esc(s.model) + ctxReadout(s);
+}
+
 function sessionCard(s) {
   const el = document.createElement("div");
   el.className = "session " + s.state
@@ -136,7 +166,8 @@ function sessionCard(s) {
       ${badge}
       <span class="x" title="close session">✕</span>
     </div>
-    <div class="recap">${recap}</div>`;
+    <div class="recap">${recap}</div>
+    ${ctxBar(s)}`;
 
   el.querySelector(".x").onclick = (ev) => { ev.stopPropagation(); closeSession(s.id); };
   el.querySelector(".name").ondblclick = (ev) => { ev.stopPropagation(); renameSession(s.id, s.name); };
@@ -201,12 +232,7 @@ function selectSession(id) {
     sendResize(t.ws, t.term);
   }
 
-  const s = state.sessions.find((x) => x.id === id);
-  if (s) {
-    document.getElementById("t-name").textContent = s.name;
-    document.getElementById("t-cwd").textContent = s.cwd + " · " + s.branch;
-    document.getElementById("t-right").textContent = "Model: " + s.model;
-  }
+  updateTermHead();
   renderSessions();
 
   // Move the cursor into the terminal so the user can type straight away.

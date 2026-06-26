@@ -680,6 +680,10 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 		if actualModel != "" {
 			sess.setActualModel(actualModel)
 		}
+		// Context-window fill for the panel gauge (claude transcripts carry per-turn usage).
+		if normalizeAgent(sess.agent) == AgentClaude {
+			sess.setContext(claudeContextOf(p.TranscriptPath))
+		}
 	}
 
 	switch {
@@ -766,6 +770,9 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 				if model != "" {
 					sess.setActualModel(model)
 				}
+				if tailer.ctxTokens > 0 && tailer.ctxMax > 0 {
+					sess.setContext(tailer.ctxTokens, tailer.ctxMax) // exact ceiling from codex
+				}
 
 				// On an approval, parse the on-screen prompt so the panel can show
 				// real answer buttons (codex's approval is a numbered select, just
@@ -844,6 +851,7 @@ func (s *Server) refreshRecapSoon(sess *Session, path, prev string) {
 		}
 		if late != "" && late != prev {
 			sess.setRecap(late)
+			sess.setContext(claudeContextOf(path)) // refresh the gauge with the final turn
 			s.broadcastSessions()
 			return
 		}

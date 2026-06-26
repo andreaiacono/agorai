@@ -38,6 +38,8 @@ type Session struct {
 	actualModel string // raw model id seen in the transcript — resolves what "default" runs on
 	state       string
 	recap       string
+	ctxTokens   int // live context-window size (tokens) from the transcript; 0 if unknown
+	ctxMax      int // model's context-window ceiling; 0 if unknown
 	promptQ     string         // parsed question for a permission prompt
 	promptCtx   string         // parsed context lines above the question (for the tooltip)
 	promptOpts  []PromptOption // parsed options for a permission prompt
@@ -60,6 +62,10 @@ type SessionDTO struct {
 	Model  string      `json:"model"` // display label, e.g. "Opus" / "default"
 	Agent  string      `json:"agent"` // which CLI backs it: "claude" | "codex"
 	Prompt *PromptInfo `json:"prompt,omitempty"`
+	// Context-window fill (claude + codex): tokens in the latest turn and the
+	// model's ceiling. 0/omitted when unknown, so the UI hides the gauge.
+	CtxTokens int `json:"ctxTokens,omitempty"`
+	CtxMax    int `json:"ctxMax,omitempty"`
 }
 
 func (s *Session) dto() SessionDTO {
@@ -79,6 +85,7 @@ func (s *Session) dto() SessionDTO {
 	return SessionDTO{
 		ID: s.ID, Name: s.name, Cwd: s.cwd, Branch: s.branch,
 		State: s.state, Recap: s.recap, Model: model, Agent: string(normalizeAgent(s.agent)), Prompt: prompt,
+		CtxTokens: s.ctxTokens, CtxMax: s.ctxMax,
 	}
 }
 
@@ -104,6 +111,12 @@ func (s *Session) recentBytes(n int) []byte {
 func (s *Session) setActualModel(id string) {
 	s.mu.Lock()
 	s.actualModel = id
+	s.mu.Unlock()
+}
+
+func (s *Session) setContext(tokens, max int) {
+	s.mu.Lock()
+	s.ctxTokens, s.ctxMax = tokens, max
 	s.mu.Unlock()
 }
 
@@ -520,6 +533,9 @@ func (m *Manager) RestoreAll() int {
 		if tp := a.TranscriptPath(p.ClaudeID); tp != "" {
 			recap, _ := a.LastLine(tp)
 			s.setRecap(recap)
+			if normalizeAgent(p.Agent) == AgentClaude {
+				s.setContext(claudeContextOf(tp))
+			}
 		}
 		n++
 	}

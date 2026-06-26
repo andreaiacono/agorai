@@ -360,6 +360,8 @@ type codexTailer struct {
 	turnActive   bool
 	lastAgent    string
 	model        string
+	ctxTokens    int // last turn's input (context) tokens, from token_count events
+	ctxMax       int // model_context_window reported by codex (exact ceiling)
 	pending      map[string]string // escalated calls awaiting approval: call_id → justification
 	pendingOrder []string
 }
@@ -388,6 +390,7 @@ func (t *codexTailer) poll() (state, recap, question, model string) {
 func (t *codexTailer) reset() {
 	t.offset, t.buf = 0, nil
 	t.turnActive, t.lastAgent = false, ""
+	t.ctxTokens, t.ctxMax = 0, 0
 	t.pending, t.pendingOrder = map[string]string{}, nil
 }
 
@@ -456,6 +459,24 @@ func (t *codexTailer) apply(ln []byte) {
 			t.turnActive = false
 			t.pending = map[string]string{}
 			t.pendingOrder = nil
+		case "token_count":
+			// Codex reports the live context size and the exact ceiling per turn.
+			var tc struct {
+				Info struct {
+					LastTokenUsage struct {
+						InputTokens int `json:"input_tokens"`
+					} `json:"last_token_usage"`
+					ModelContextWindow int `json:"model_context_window"`
+				} `json:"info"`
+			}
+			if json.Unmarshal(l.Payload, &tc) == nil {
+				if tc.Info.LastTokenUsage.InputTokens > 0 {
+					t.ctxTokens = tc.Info.LastTokenUsage.InputTokens
+				}
+				if tc.Info.ModelContextWindow > 0 {
+					t.ctxMax = tc.Info.ModelContextWindow
+				}
+			}
 		}
 	}
 }
