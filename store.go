@@ -10,7 +10,8 @@ import (
 // persisted is the minimal record needed to bring a session back after a
 // restart: claude's session id (to `--resume`) and where to run it.
 type persisted struct {
-	ClaudeID string    `json:"claudeId"` // the agent session id to resume; for a Pending codex record this is the agorai launch id (a placeholder store key, not resumable)
+	ClaudeID string    `json:"claudeId"`           // the agent session id to resume; for a Pending codex record this is the agorai launch id (a placeholder store key, not resumable)
+	LaunchID string    `json:"launchId,omitempty"` // agorai's own launch id (the DTO id); reused on restore so the client's saved row order survives a restart
 	Cwd      string    `json:"cwd"`
 	Name     string    `json:"name"`
 	Branch   string    `json:"branch"`

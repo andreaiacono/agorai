@@ -331,24 +331,24 @@ func (m *Manager) buildEnv(launchID string, exclude ...string) []string {
 // Spawn starts a new claude process in cwd and begins streaming its output.
 // extraArgs are passed to the claude CLI (e.g. "--resume", "<id>").
 func (m *Manager) Spawn(cwd, name, branch string, extraArgs ...string) (*Session, error) {
-	return m.spawn(AgentClaude, cwd, name, branch, nil, extraArgs...)
+	return m.spawn(AgentClaude, "", cwd, name, branch, nil, extraArgs...)
 }
 
 // SpawnWithoutEnv is like Spawn but drops the given env vars (e.g. review
 // sessions run without DATABASE_URL so they can't query the DB).
 func (m *Manager) SpawnWithoutEnv(cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
-	return m.spawn(AgentClaude, cwd, name, branch, excludeEnv, extraArgs...)
+	return m.spawn(AgentClaude, "", cwd, name, branch, excludeEnv, extraArgs...)
 }
 
 // SpawnAs starts a session backed by the given agent (claude or codex).
 func (m *Manager) SpawnAs(agent AgentKind, cwd, name, branch string, extraArgs ...string) (*Session, error) {
-	return m.spawn(agent, cwd, name, branch, nil, extraArgs...)
+	return m.spawn(agent, "", cwd, name, branch, nil, extraArgs...)
 }
 
 // SpawnAsWithoutEnv is SpawnAs but drops the given env vars (e.g. reviews run
 // without DATABASE_URL).
 func (m *Manager) SpawnAsWithoutEnv(agent AgentKind, cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
-	return m.spawn(agent, cwd, name, branch, excludeEnv, extraArgs...)
+	return m.spawn(agent, "", cwd, name, branch, excludeEnv, extraArgs...)
 }
 
 // hasClaudeID reports whether a live session already owns this agent session id
@@ -364,9 +364,14 @@ func (m *Manager) hasClaudeID(id string) bool {
 	return false
 }
 
-func (m *Manager) spawn(agent AgentKind, cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
+// spawn starts a session. id is the agorai launch id (== the DTO id); pass "" for
+// a new session, or a persisted LaunchID on restore so the id — and thus the
+// client's saved row order — stays stable across restarts.
+func (m *Manager) spawn(agent AgentKind, id, cwd, name, branch string, excludeEnv []string, extraArgs ...string) (*Session, error) {
 	agent = normalizeAgent(agent)
-	id := newID()
+	if id == "" {
+		id = newID()
+	}
 
 	cmd := exec.Command(agentFor(agent).Command(), extraArgs...)
 	cmd.Dir = cwd
@@ -422,7 +427,7 @@ func (m *Manager) bind(launchID, claudeID string) *Session {
 
 	if newly && m.store != nil {
 		s.mu.Lock()
-		p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
+		p := persisted{ClaudeID: claudeID, LaunchID: s.ID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
 		oldID := s.resumeOf
 		s.mu.Unlock()
 
@@ -470,7 +475,7 @@ func (m *Manager) persistPlaceholder(s *Session) {
 		return
 	}
 	s.mu.Lock()
-	p := persisted{ClaudeID: s.ID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent, Pending: true}
+	p := persisted{ClaudeID: s.ID, LaunchID: s.ID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent, Pending: true}
 	s.mu.Unlock()
 	m.store.upsert(p)
 }
@@ -509,7 +514,7 @@ func (m *Manager) RestoreAll() int {
 		// activity yet). Bring it back as a fresh session in the same dir, and
 		// re-save the placeholder under the new launch id (drop the old one).
 		if p.Pending {
-			s, err := m.spawn(p.Agent, p.Cwd, p.Name, p.Branch, nil, a.FreshArgs("", p.Model, "")...)
+			s, err := m.spawn(p.Agent, p.LaunchID, p.Cwd, p.Name, p.Branch, nil, a.FreshArgs("", p.Model, "")...)
 			m.store.remove(p.ClaudeID)
 			if err != nil {
 				continue
@@ -521,13 +526,20 @@ func (m *Manager) RestoreAll() int {
 		}
 
 		args := append(a.ResumeArgs(p.ClaudeID), a.ModelArgs(p.Model)...)
-		s, err := m.spawn(p.Agent, p.Cwd, p.Name, p.Branch, nil, args...)
+		s, err := m.spawn(p.Agent, p.LaunchID, p.Cwd, p.Name, p.Branch, nil, args...)
 		if err != nil {
 			m.store.remove(p.ClaudeID)
 			continue
 		}
 		s.setModel(p.Model)
 		s.ClaudeID = p.ClaudeID // same id continues; keep it recognized
+		// Stamp the launch id so it's reused (and the row order stays stable) on the
+		// next restart — restored claude sessions don't re-bind, so do it here. Also
+		// migrates pre-LaunchID records (where spawn just minted a fresh one).
+		if p.LaunchID != s.ID {
+			p.LaunchID = s.ID
+			m.store.upsert(p)
+		}
 		// Seed the recap from the transcript so a restored session shows its last
 		// line immediately (not "Starting…"), even with no hooks installed.
 		if tp := a.TranscriptPath(p.ClaudeID); tp != "" {
@@ -583,7 +595,7 @@ func newUUID() string {
 func (m *Manager) adopt(s *Session, claudeID string) {
 	s.mu.Lock()
 	s.ClaudeID = claudeID
-	p := persisted{ClaudeID: claudeID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
+	p := persisted{ClaudeID: claudeID, LaunchID: s.ID, Cwd: s.cwd, Name: s.name, Branch: s.branch, Model: s.model, Agent: s.agent}
 	launchID := s.ID
 	s.mu.Unlock()
 	if m.store != nil {
@@ -603,7 +615,7 @@ func (m *Manager) Rename(id, name string) {
 	}
 	s.mu.Lock()
 	s.name = name
-	p := persisted{ClaudeID: s.ClaudeID, Cwd: s.cwd, Name: name, Branch: s.branch, Model: s.model, Agent: s.agent}
+	p := persisted{ClaudeID: s.ClaudeID, LaunchID: s.ID, Cwd: s.cwd, Name: name, Branch: s.branch, Model: s.model, Agent: s.agent}
 	s.mu.Unlock()
 	if p.ClaudeID != "" && m.store != nil {
 		m.store.upsert(p)
