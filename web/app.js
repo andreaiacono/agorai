@@ -11,7 +11,10 @@ const state = {
   config: { scrollback: 10000, env: {} },
   unread: new Set(),       // sessions that completed (working→idle) but aren't viewed yet
   prevStates: {},          // id -> last seen state, for transition detection
+  order: [],               // user's drag-reorder of the rows (ids), persisted in localStorage
 };
+
+let dragId = null;         // id of the row being dragged (null when not dragging)
 
 /* ---------- control WebSocket: state in, commands out ---------- */
 
@@ -52,10 +55,33 @@ function answer(id, option) {
 
 /* ---------- session list (left panel) ---------- */
 
+const ORDER_KEY = "agorai.order";
+function loadOrder() {
+  try { state.order = JSON.parse(localStorage.getItem(ORDER_KEY) || "[]"); } catch { state.order = []; }
+}
+function saveOrder() {
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(state.order)); } catch {}
+}
+
+// Sessions sorted by the user's drag order: known ids first (in that order),
+// then any session not yet placed keeps the server order, appended at the end.
+// Also normalizes state.order in memory (drops vanished ids, adds new ones).
+function orderedSessions() {
+  const byId = new Map(state.sessions.map((s) => [s.id, s]));
+  const out = [];
+  for (const id of state.order) {
+    if (byId.has(id)) { out.push(byId.get(id)); byId.delete(id); }
+  }
+  for (const s of state.sessions) { if (byId.has(s.id)) out.push(s); }
+  state.order = out.map((s) => s.id);
+  return out;
+}
+
 function renderSessions() {
+  if (dragId) return; // don't rebuild mid-drag — a WS update would yank the dragged row
   const list = document.getElementById("session-list");
   list.innerHTML = "";
-  for (const s of state.sessions) {
+  for (const s of orderedSessions()) {
     list.appendChild(sessionCard(s));
   }
   disposeStaleTerminals();
@@ -114,6 +140,17 @@ function sessionCard(s) {
 
   el.querySelector(".x").onclick = (ev) => { ev.stopPropagation(); closeSession(s.id); };
   el.querySelector(".name").ondblclick = (ev) => { ev.stopPropagation(); renameSession(s.id, s.name); };
+
+  // Drag to reorder the rows (committed to state.order on drop).
+  el.draggable = true;
+  el.dataset.id = s.id;
+  el.addEventListener("dragstart", (ev) => {
+    dragId = s.id;
+    el.classList.add("dragging");
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", s.id); // Firefox needs data set to begin a drag
+  });
+  el.addEventListener("dragend", () => { dragId = null; el.classList.remove("dragging"); });
 
   if (s.state === "perm") {
     const p = document.createElement("div");
@@ -1015,6 +1052,33 @@ document.getElementById("find-input").addEventListener("keydown", (e) => {
 });
 
 document.getElementById("sound-btn").textContent = soundOn ? "🔊" : "🔇";
+// Drag-reorder: live-move the dragged row during dragover, commit to state.order
+// (+ localStorage) on drop. Bound once to the persistent list container.
+function initDragReorder() {
+  const list = document.getElementById("session-list");
+  list.addEventListener("dragover", (ev) => {
+    if (!dragId) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    const dragging = list.querySelector(".session.dragging");
+    if (!dragging) return;
+    const rest = [...list.querySelectorAll(".session:not(.dragging)")];
+    const ref = rest.find((c) => ev.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
+    if (ref) list.insertBefore(dragging, ref);
+    else list.appendChild(dragging);
+  });
+  list.addEventListener("drop", (ev) => {
+    if (!dragId) return;
+    ev.preventDefault();
+    dragId = null; // allow renders again
+    state.order = [...list.querySelectorAll(".session")].map((c) => c.dataset.id);
+    saveOrder();
+    renderSessions();
+  });
+}
+
+loadOrder();
+initDragReorder();
 renderTopBar();
 loadConfig();
 connectControl();

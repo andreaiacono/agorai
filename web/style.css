@@ -117,6 +117,7 @@ body {
 }
 .session:hover { background: var(--panel-2); }
 .session.selected { background: var(--panel-2); border-color: var(--accent); }
+.session.dragging { opacity: .5; border-color: var(--accent); border-style: dashed; cursor: grabbing; }
 .session .row1 { display: flex; align-items: center; gap: 8px; }
 
 /* Four buckets:
