@@ -67,7 +67,7 @@ func defaultButtons() []Button {
 			Agents: allAgents, ShowModel: true,
 			Workspace:   &ButtonWorkspace{Dir: "~/dev/PRs", Trust: true},
 			Inputs:      []ButtonInput{{ID: "ticket", Label: "Linear ticket", Placeholder: "e.g. BLUE-900", Required: true, Transform: "blue-prefix"}},
-			Prompt:      strings.NewReplacer("$TICKET", "{ticket}", "$DIR", "{workspace}").Replace(ticketPlanPromptTemplate),
+			Prompt:      ticketPlanPromptTemplate,
 			SessionName: "Ticket {ticket}",
 		},
 		{
@@ -75,7 +75,7 @@ func defaultButtons() []Button {
 			Agents: allAgents, ShowModel: true, Unattended: true, ExcludeEnv: []string{"DATABASE_URL"},
 			Workspace:   &ButtonWorkspace{Scratch: "review"},
 			Inputs:      []ButtonInput{{ID: "pr", Label: "GitHub PR", Placeholder: "PR number (e.g. 7098) or URL", Required: true}},
-			Prompt:      strings.ReplaceAll(reviewPRPrompt, "$PR", "{pr}"),
+			Prompt:      reviewPRPrompt,
 			SessionName: "Review {pr}",
 		},
 		{

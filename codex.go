@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -335,9 +336,8 @@ func codexRolloutMeta(path string) (id, cwd string) {
 	return m.ID, m.Cwd
 }
 
-// codexState derives the current session state from a rollout tail. Codex has
-// no hooks, so this (polled by the tailer) is how agorai knows what a codex
-// session is doing.
+// codexTailer derives codex session state from the rollout JSONL. Codex has no
+// hooks, so this is how agorai knows what a codex session is doing:
 //
 //	state   — StateWorking | StatePerm | StateIdle
 //	recap   — last agent message (or the approval question when paused)
@@ -348,82 +348,140 @@ func codexRolloutMeta(path string) (id, cwd string) {
 // the agent emits a function_call needing escalation (sandbox_permissions ==
 // "require_escalated") and waits — no function_call_output, no task_complete —
 // so a still-pending escalated call means we're waiting for the user.
-func codexState(path string) (state, recap, question, model string) {
-	lines := tailLines(path, 256*1024)
+//
+// The tailer reads the rollout **incrementally** (only bytes appended since the
+// last poll) and keeps the turn state across reads, so a turn's task_started
+// marker is never lost — a heavy turn (big diffs, long tool output) can push it
+// far beyond any fixed tail window, which would otherwise read as idle.
+type codexTailer struct {
+	path         string
+	offset       int64
+	buf          []byte // partial trailing line carried to the next read
+	turnActive   bool
+	lastAgent    string
+	model        string
+	pending      map[string]string // escalated calls awaiting approval: call_id → justification
+	pendingOrder []string
+}
 
-	turnActive := false
-	lastAgent := ""
-	// pending escalated calls awaiting approval, keyed by call_id, → justification
-	pending := map[string]string{}
-	var pendingOrder []string
+func newCodexTailer(path string) *codexTailer {
+	return &codexTailer{path: path, pending: map[string]string{}}
+}
 
-	for _, ln := range lines {
-		var l codexRolloutLine
-		if json.Unmarshal([]byte(ln), &l) != nil {
-			continue
+// poll reads any bytes appended since the last call and returns the derived state.
+func (t *codexTailer) poll() (state, recap, question, model string) {
+	if f, err := os.Open(t.path); err == nil {
+		if fi, err := f.Stat(); err == nil && fi.Size() < t.offset {
+			t.reset() // file rotated/truncated — rebuild from the start
 		}
-		switch l.Type {
-		case "turn_context":
-			var p struct {
-				Model string `json:"model"`
+		if _, err := f.Seek(t.offset, io.SeekStart); err == nil {
+			if data, err := io.ReadAll(f); err == nil {
+				t.offset += int64(len(data))
+				t.consume(data)
 			}
-			if json.Unmarshal(l.Payload, &p) == nil && p.Model != "" {
-				model = p.Model
-			}
-		case "response_item":
-			var p struct {
-				Type      string `json:"type"`
-				CallID    string `json:"call_id"`
-				Arguments string `json:"arguments"`
-			}
-			if json.Unmarshal(l.Payload, &p) != nil {
-				continue
-			}
-			switch p.Type {
-			case "function_call":
-				if just, escalated := codexEscalation(p.Arguments); escalated {
-					if _, seen := pending[p.CallID]; !seen {
-						pendingOrder = append(pendingOrder, p.CallID)
-					}
-					pending[p.CallID] = just
+		}
+		f.Close()
+	}
+	return t.derive()
+}
+
+func (t *codexTailer) reset() {
+	t.offset, t.buf = 0, nil
+	t.turnActive, t.lastAgent = false, ""
+	t.pending, t.pendingOrder = map[string]string{}, nil
+}
+
+func (t *codexTailer) consume(data []byte) {
+	t.buf = append(t.buf, data...)
+	for {
+		i := bytes.IndexByte(t.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := t.buf[:i]
+		t.buf = t.buf[i+1:]
+		t.apply(line)
+	}
+}
+
+func (t *codexTailer) apply(ln []byte) {
+	var l codexRolloutLine
+	if json.Unmarshal(ln, &l) != nil {
+		return
+	}
+	switch l.Type {
+	case "turn_context":
+		var p struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(l.Payload, &p) == nil && p.Model != "" {
+			t.model = p.Model
+		}
+	case "response_item":
+		var p struct {
+			Type      string `json:"type"`
+			CallID    string `json:"call_id"`
+			Arguments string `json:"arguments"`
+		}
+		if json.Unmarshal(l.Payload, &p) != nil {
+			return
+		}
+		switch p.Type {
+		case "function_call":
+			if just, escalated := codexEscalation(p.Arguments); escalated {
+				if _, seen := t.pending[p.CallID]; !seen {
+					t.pendingOrder = append(t.pendingOrder, p.CallID)
 				}
-			case "function_call_output":
-				delete(pending, p.CallID) // resolved (approved or denied)
+				t.pending[p.CallID] = just
 			}
-		case "event_msg":
-			var p struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
+		case "function_call_output":
+			delete(t.pending, p.CallID) // resolved (approved or denied)
+		}
+	case "event_msg":
+		var p struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(l.Payload, &p) != nil {
+			return
+		}
+		switch p.Type {
+		case "task_started":
+			t.turnActive = true
+		case "agent_message":
+			if strings.TrimSpace(p.Message) != "" {
+				t.lastAgent = p.Message
 			}
-			if json.Unmarshal(l.Payload, &p) != nil {
-				continue
-			}
-			switch p.Type {
-			case "task_started":
-				turnActive = true
-			case "agent_message":
-				if strings.TrimSpace(p.Message) != "" {
-					lastAgent = p.Message
-				}
-			case "task_complete":
-				turnActive = false
-				pending = map[string]string{}
-				pendingOrder = nil
-			}
+		case "task_complete":
+			t.turnActive = false
+			t.pending = map[string]string{}
+			t.pendingOrder = nil
 		}
 	}
+}
 
-	recap = truncate(oneLine(lastAgent), 90)
+func (t *codexTailer) derive() (state, recap, question, model string) {
+	recap = truncate(oneLine(t.lastAgent), 90)
 	// An unresolved escalated call → waiting on the user.
-	for i := len(pendingOrder) - 1; i >= 0; i-- {
-		if just, ok := pending[pendingOrder[i]]; ok {
-			return StatePerm, recap, truncate(oneLine(just), 200), model
+	for i := len(t.pendingOrder) - 1; i >= 0; i-- {
+		if just, ok := t.pending[t.pendingOrder[i]]; ok {
+			return StatePerm, recap, truncate(oneLine(just), 200), t.model
 		}
 	}
-	if turnActive {
-		return StateWorking, recap, "", model
+	if t.turnActive {
+		return StateWorking, recap, "", t.model
 	}
-	return StateIdle, recap, "", model
+	return StateIdle, recap, "", t.model
+}
+
+// codexState is a one-shot read (recap/model for LastLine and recap seeding); it
+// processes a bounded tail since it doesn't need the precise turn boundary.
+func codexState(path string) (state, recap, question, model string) {
+	t := newCodexTailer(path)
+	for _, ln := range tailLines(path, 256*1024) {
+		t.apply([]byte(ln))
+	}
+	return t.derive()
 }
 
 // codexEscalation reports whether an exec_command's JSON arguments request an

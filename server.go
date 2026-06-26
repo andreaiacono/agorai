@@ -242,11 +242,20 @@ type createReq struct {
 // produce a copy/paste-friendly list of short comments to post on the PR.
 const reviewCommentsSuffix = " Then, at the very end, add a section titled \"Proposed comments\" — a copy/paste-friendly list of the comments you'd post on the PR. Put each comment on its own line, prefixed with its `file:line`. Keep every comment very short and simple, with no surrounding quotes and no line breaks within a comment."
 
-// reviewPRPrompt is the initial prompt for a PR review; $PR is the PR the user
+// readOnlyGuardrail is the shared, session-wide read-only policy appended to the
+// New PR and Review PR prompts: read freely, but never take a write/outward
+// action without an explicit per-action confirmation.
+const readOnlyGuardrail = "Guardrail — read-only by default, applies for the WHOLE session and overrides any later ambiguous request: you may READ from GitHub and Linear (look up the ticket, read PR/issue comments, diffs, CI). You may NOT perform any WRITE/outward action without me first confirming that specific action and waiting for an explicit \"yes.\" Write actions include, non-exhaustively: committing, pushing, creating/updating/deleting branches, opening or editing PRs, posting/editing/resolving PR or issue comments or review replies, requesting reviewers, applying labels, and changing Linear ticket state or posting Linear comments. Confirmation for one action NEVER carries over to another or to future similar actions — ask again each time. If I ask you to \"reply to\", \"address\", \"respond to\", \"resolve\", or \"provide replies/fixes for\" comments, that means: make any code fixes locally (still no commit/push without confirmation) and DRAFT the reply text here for my review — it does NOT authorize posting to GitHub/Linear. Only post after I explicitly say to post. When in doubt, produce it here for me to review rather than acting."
+
+// closingInstructions are shared by the New PR and Review PR prompts: keep Linear
+// ticket IDs out of code comments, and archive decisions via /lucid-adr at the end.
+const closingInstructions = " Do NOT reference Linear ticket IDs in code comments. Finally, if the `/lucid-adr` command (the lucid-adr skill) is available here, run it to archive the key decisions from this work; if it isn't available, skip this step."
+
+// reviewPRPrompt is the initial prompt for a PR review; {pr} is the PR the user
 // entered (a number, or a URL / owner/repo#123). A bare number assumes the
 // default repo; the linked Linear ticket is pulled from the PR description for
-// extra context.
-const reviewPRPrompt = "Please spawn the reviewers for GitHub PR $PR. If $PR is only a number, assume the repository is `light-space/light`. First read the PR description (e.g. `gh pr view $PR --json body,title,url`) and find the Linear ticket it references; use that ticket's description as additional context for the review. Work only with read-only `gh` commands (`gh pr view`, `gh pr diff`, `gh api` GET); do not checkout the branch. This is a STRICTLY READ-ONLY review — do NOT make any changes anywhere: NEVER commit or push without asking me to confirm first, and no new branches, no file edits, and nothing posted to GitHub or Linear (no PR comments, reviews, approvals, request-changes, labels, or status updates). Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
+// extra context. Shares readOnlyGuardrail with the New PR prompt.
+const reviewPRPrompt = "Please spawn the reviewers for GitHub PR {pr}. If {pr} is only a number, assume the repository is `light-space/light`. First read the PR description (e.g. `gh pr view {pr} --json body,title,url`) and find the Linear ticket it references; use that ticket's description as additional context for the review. Work from read-only `gh` (`gh pr view`, `gh pr diff {pr}`, `gh api` GET) and don't check out the branch. Produce the review analysis here in this session for me to read. " + readOnlyGuardrail + reviewCommentsSuffix + closingInstructions
 
 // reviewMinePrompt reviews the user's *local* working branch (no PR yet): the
 // diff of the current branch against its base branch, computed with local git
@@ -257,18 +266,17 @@ const reviewPRPrompt = "Please spawn the reviewers for GitHub PR $PR. If $PR is 
 const reviewMinePrompt = "Please spawn the reviewers to review my local changes in this repository (`{dir}`). There is no PR yet — review the diff between the current branch and its base/source branch. Determine the base branch (the repository's default branch such as `main`, or the branch this one was created from — `git merge-base` / `git log` can help) and review the committed changes (`git diff <base>...HEAD`) together with any uncommitted working-tree changes (`git status`, `git diff`). For context on what the change should achieve, identify the Linear ticket this work belongs to — derive its ID from the current branch name (e.g. `feature/blue-618-…` → `BLUE-618`) or from the commit-message prefixes (e.g. `fix(BLUE-618): …`); if you find one, read the ticket and treat its description as the intended end state to review the code against. Work only with local read-only `git` commands plus reading that ticket — there is no PR, so don't use `gh`; do NOT checkout other branches, edit files, commit, push, or post anything to GitHub or Linear; NEVER commit or push without asking me to confirm first. Only produce the review analysis here in this session for me to read." + reviewCommentsSuffix
 
 // ticketPlanPromptTemplate is the initial prompt for the "New PR" button: there
-// is no PR yet — Claude looks up the ticket, sets up a fresh checkout + branch
+// is no PR yet — the agent looks up the ticket, sets up a fresh checkout + branch
 // under the PRs workspace, and produces an implementation plan for the new work.
-// $TICKET and $DIR are filled in at spawn time.
-const ticketPlanPromptTemplate = "I want to start working on Linear ticket $TICKET. There is no PR for it yet — this is new work. " +
+// {ticket} and {workspace} are filled in at spawn time. Shares readOnlyGuardrail
+// with the Review PR prompt.
+const ticketPlanPromptTemplate = "I want to start working on Linear ticket {ticket}. There is no PR for it yet — this is new work. " +
 	"First, look up the ticket to understand its requirements. " +
-	"Create a new working directory named $TICKET under $DIR (i.e. $DIR/$TICKET), check out the repository it targets there (for Light work that's `light-space/light`; clone it first if needed), and create a new git branch for this ticket off the default branch. " +
+	"Create a new working directory named {ticket} under {workspace} (i.e. {workspace}/{ticket}), check out the repository it targets there (for Light work that's `light-space/light`; clone it first if needed), and create a new git branch for this ticket off the default branch. " +
 	"Then give me a clear, actionable implementation plan for building it: the approach, the files to change, edge cases and tests to consider, and the concrete steps in order. " +
 	"Also consider whether the feature should emit usage metrics so we can tell whether it's actually being used, and if so call that out in the plan. " +
 	"Treat the ticket description as the source of truth for the desired end state. " +
-	"NEVER commit or push without asking me to confirm first, and don't open PRs or post anything to GitHub/Linear — produce the plan here for me to review. " +
-	"Do NOT reference Linear ticket IDs (e.g. $TICKET) in code comments. " +
-	"Finally, if the `/lucid-adr` command (the lucid-adr skill) is available here, run it to archive the key decisions from this work; if it isn't available, skip this step."
+	readOnlyGuardrail + closingInstructions
 
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
 func scratchWorkspace() string { return appWorkspace("scratch") }
@@ -733,6 +741,7 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 		return // already supervised
 	}
 	var lastSig string
+	var tailer *codexTailer // built once the rollout path is known; keeps turn state across polls
 	for {
 		if s.mgr.Get(sess.ID) == nil || sess.currentState() == StateDone {
 			return
@@ -750,7 +759,10 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 
 		if id != "" {
 			if path := codexTranscriptPath(id); path != "" {
-				state, recap, question, model := codexState(path)
+				if tailer == nil || tailer.path != path {
+					tailer = newCodexTailer(path)
+				}
+				state, recap, question, model := tailer.poll()
 				if model != "" {
 					sess.setActualModel(model)
 				}
