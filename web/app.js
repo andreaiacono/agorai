@@ -121,18 +121,18 @@ function agentIcon(agent) {
 function ctxPct(s) {
   return s.ctxTokens && s.ctxMax ? Math.min(100, Math.round((s.ctxTokens / s.ctxMax) * 100)) : 0;
 }
-function ctxLevel(pct) { return pct >= 85 ? "hi" : pct >= 60 ? "mid" : "lo"; }
 function fmtTokens(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n); }
+// The gauge is always blue — it must not borrow the state colours (green/amber/red).
 function ctxBar(s) {
   if (!s.ctxTokens || !s.ctxMax) return "";
   const pct = ctxPct(s);
   return `<div class="ctxbar" title="Context ${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} (${pct}%)">` +
-    `<span class="${ctxLevel(pct)}" style="width:${pct}%"></span></div>`;
+    `<span style="width:${pct}%"></span></div>`;
 }
 function ctxReadout(s) {
   if (!s.ctxTokens || !s.ctxMax) return "";
   const pct = ctxPct(s);
-  return ` · <span class="ctx-read ${ctxLevel(pct)}">${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} ctx · ${pct}%</span>`;
+  return ` · <span class="ctx-read">${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} ctx · ${pct}%</span>`;
 }
 
 // Refresh the focused session's header (name/cwd/model + live context readout).

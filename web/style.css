@@ -138,13 +138,8 @@ body {
 .recap { color: var(--dim); margin-top: 4px; padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* context-window fill gauge (claude) */
 .ctxbar { height: 3px; margin: 6px 0 0 16px; background: var(--border); border-radius: 2px; overflow: hidden; }
-.ctxbar span { display: block; height: 100%; border-radius: 2px; transition: width .3s; }
-.ctxbar span.lo { background: var(--green); }
-.ctxbar span.mid { background: var(--yellow); }
-.ctxbar span.hi { background: var(--red); }
-.ctx-read.lo { color: var(--green); }
-.ctx-read.mid { color: var(--yellow); }
-.ctx-read.hi { color: var(--red); }
+.ctxbar span { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width .3s; }
+.ctx-read { color: var(--dim); }
 /* animated "Working" dots: . → .. → ... → .. → . → … */
 .recap .dots::after { content: "."; animation: working-dots 1.4s infinite; }
 @keyframes working-dots {
