@@ -510,14 +510,13 @@ async function openConfig(b) {
 // Render the button's allowed agents (all if unspecified) as radio buttons.
 function populateAgentOptions(agents) {
   const list = (agents && agents.length) ? agents : Object.keys(AGENT_NAMES);
-  const prev = selectedAgent(); // keep the prior pick if it's still allowed
   document.getElementById("agent-opts").innerHTML = list.map((a) =>
     `<label class="agent-opt"><input type="radio" name="agent" value="${esc(a)}" onchange="onAgentChange()"> ${esc(AGENT_NAMES[a] || a)}</label>`
   ).join("");
-  // No default selection — the user picks deliberately. Only exception: when a
-  // single agent is allowed, select it (and hide the row) so launch isn't blocked.
+  // Never default — the user picks every time (the last used agent is NOT
+  // carried over). Only exception: when a single agent is allowed, select it
+  // (and hide the row) so launch isn't blocked.
   if (list.length === 1) setAgent(list[0]);
-  else if (list.includes(prev)) setAgent(prev);
   document.querySelector(".agent-row").style.display = list.length > 1 ? "" : "none";
 }
 
