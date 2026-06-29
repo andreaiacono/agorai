@@ -773,6 +773,9 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 				if tailer.ctxTokens > 0 && tailer.ctxMax > 0 {
 					sess.setContext(tailer.ctxTokens, tailer.ctxMax) // exact ceiling from codex
 				}
+				if tailer.limit5hReset > 0 || tailer.limitWkReset > 0 {
+					sess.setLimits(tailer.limit5hPct, tailer.limit5hReset, tailer.limitWkPct, tailer.limitWkReset)
+				}
 
 				// On an approval, parse the on-screen prompt so the panel can show
 				// real answer buttons (codex's approval is a numbered select, just
@@ -964,11 +967,18 @@ func isEscInterrupt(data []byte) bool {
 // must NOT be mistaken for the user typing.
 var termReportRe = regexp.MustCompile("\x1b\\[[0-9;?>=]*[RcnIO]")
 
-// looksTyped reports whether a PTY input frame contains a genuine keystroke
-// (anything left once terminal report sequences are stripped) rather than only
-// auto-generated terminal replies.
+// looksTyped reports whether a PTY input frame contains a genuine *content*
+// keystroke — something left once terminal report sequences are stripped, and
+// not just a bare Enter/newline. A lone Enter submits nothing on an empty prompt,
+// so it must not flip a waiting session to "working"; real input already flips on
+// its first content character (the Enter only ends it).
 func looksTyped(data []byte) bool {
-	return len(termReportRe.ReplaceAll(data, nil)) > 0
+	for _, b := range termReportRe.ReplaceAll(data, nil) {
+		if b != '\r' && b != '\n' {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- control WebSocket (shared: state out, commands in) ----

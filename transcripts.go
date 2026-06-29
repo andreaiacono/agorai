@@ -225,12 +225,12 @@ func lastAssistantInfo(path string) (string, string) {
 }
 
 // claudeContextTokens returns the live context-window size from the latest
-// assistant turn's usage (input + cache-read + cache-creation) in the transcript,
-// read from the tail so it stays cheap on long sessions. 0 if unknown. This is
-// the "context fill" the panel shows — there is no account-level quota readable
-// from disk (rate-limit state lives only in ephemeral API response headers).
-func claudeContextTokens(path string) int {
-	ctx := 0
+// assistant turn's usage (input + cache-read + cache-creation) and that turn's
+// model id, read from the tail so it stays cheap on long sessions. 0/"" if
+// unknown. This is the "context fill" the panel shows — there is no account-level
+// quota readable from disk (rate-limit state lives only in API response headers).
+func claudeContextTokens(path string) (int, string) {
+	ctx, model := 0, ""
 	for _, line := range tailLines(path, 256*1024) {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -251,31 +251,36 @@ func claudeContextTokens(path string) int {
 			if t := m.Usage.InputTokens + m.Usage.CacheReadTokens + m.Usage.CacheCreationTokens; t > 0 {
 				ctx = t // keep the most recent assistant turn's context size
 			}
+			if m.Model != "" {
+				model = m.Model
+			}
 		}
 	}
-	return ctx
+	return ctx, model
 }
 
-// contextWindowMax returns the smallest standard context ceiling that fits the
-// observed token count: 200k for normal models, 1M for the large-context ones.
-// Adaptive so we need no exact per-model table and never report over 100%.
-// (Codex carries its exact model_context_window, so it doesn't need this.)
-func contextWindowMax(tokens int) int {
-	switch {
-	case tokens <= 0:
-		return 0
-	case tokens > 200_000:
-		return 1_000_000
-	default:
+// claudeContextWindowFor maps a claude model id to its context-window ceiling.
+// Transcripts don't carry the window (unlike codex), so derive it from the model
+// rather than the token count — a token-based guess made the gauge inconsistent
+// (a 97k session read 200k→49% while a 245k session read 1M→24%). Current-gen
+// models (4.x+, e.g. opus-4-8) run a 1M window here; the older 3.x/2.x line is
+// 200k. Unknown → 1M (matches this environment's models).
+func claudeContextWindowFor(model string) int {
+	m := strings.ToLower(model)
+	if strings.Contains(m, "claude-3") || strings.Contains(m, "claude-2") {
 		return 200_000
 	}
+	return 1_000_000
 }
 
 // claudeContextOf returns (tokens, ceiling) for the latest claude turn — the pair
 // the session stores for its gauge. Both 0 when the transcript has no usage yet.
 func claudeContextOf(path string) (int, int) {
-	t := claudeContextTokens(path)
-	return t, contextWindowMax(t)
+	t, model := claudeContextTokens(path)
+	if t == 0 {
+		return 0, 0
+	}
+	return t, claudeContextWindowFor(model)
 }
 
 // extractText pulls plain text out of a message's content, which may be a raw

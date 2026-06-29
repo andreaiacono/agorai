@@ -134,6 +134,25 @@ function ctxReadout(s) {
   const pct = ctxPct(s);
   return ` · <span class="ctx-read">${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} ctx · ${pct}%</span>`;
 }
+// Account usage limits (codex only) — the 5h + weekly rolling windows from /status.
+function fmtReset(epoch) {
+  if (!epoch) return "?";
+  const mins = Math.round((epoch * 1000 - Date.now()) / 60000);
+  if (mins <= 0) return "now";
+  if (mins < 60) return mins + "m";
+  const h = Math.floor(mins / 60);
+  return h < 24 ? h + "h" : Math.floor(h / 24) + "d";
+}
+function limitReadout(s) {
+  const l = s.limits;
+  if (!l) return "";
+  const parts = [];
+  if (l.reset5h) parts.push(`5h ${l.pct5h}%`);
+  if (l.resetWeek) parts.push(`wk ${l.pctWeek}%`);
+  if (!parts.length) return "";
+  const tip = `Account usage limits. 5h window resets in ${fmtReset(l.reset5h)}, weekly in ${fmtReset(l.resetWeek)}.`;
+  return ` · <span class="lim-read" title="${tip}">usage ${parts.join(" · ")}</span>`;
+}
 
 // Refresh the focused session's header (name/cwd/model + live context readout).
 // Called on select and on every render so the readout tracks each turn.
@@ -142,7 +161,7 @@ function updateTermHead() {
   if (!s) return;
   document.getElementById("t-name").textContent = s.name;
   document.getElementById("t-cwd").textContent = s.cwd + " · " + s.branch;
-  document.getElementById("t-right").innerHTML = "Model: " + esc(s.model) + ctxReadout(s);
+  document.getElementById("t-right").innerHTML = "Model: " + esc(s.model) + ctxReadout(s) + limitReadout(s);
 }
 
 function sessionCard(s) {

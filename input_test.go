@@ -5,8 +5,9 @@ import "testing"
 func TestLooksTyped(t *testing.T) {
 	cases := map[string]bool{
 		"y":                 true,  // a keystroke
-		"\r":                true,  // Enter
-		"3\r":               true,  // answer a numbered prompt
+		"\r":                false, // a bare Enter submits nothing on an empty prompt
+		"\n":                false, // bare newline, likewise
+		"3\r":               true,  // answer a numbered prompt (the digit is content)
 		"\x1b[A":            true,  // arrow key (user navigation)
 		"\x1b[12;34R":       false, // cursor-position report (terminal reply)
 		"\x1b[?62;1;6c":     false, // primary device attributes

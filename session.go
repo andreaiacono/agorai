@@ -40,6 +40,9 @@ type Session struct {
 	recap       string
 	ctxTokens   int // live context-window size (tokens) from the transcript; 0 if unknown
 	ctxMax      int // model's context-window ceiling; 0 if unknown
+	// account usage-limit windows (codex only): used percent + unix reset per window
+	limit5hPct, limitWkPct     int
+	limit5hReset, limitWkReset int64
 	promptQ     string         // parsed question for a permission prompt
 	promptCtx   string         // parsed context lines above the question (for the tooltip)
 	promptOpts  []PromptOption // parsed options for a permission prompt
@@ -66,6 +69,16 @@ type SessionDTO struct {
 	// model's ceiling. 0/omitted when unknown, so the UI hides the gauge.
 	CtxTokens int `json:"ctxTokens,omitempty"`
 	CtxMax    int `json:"ctxMax,omitempty"`
+	// Account usage limits (codex only; absent for claude — not readable from disk).
+	Limits *UsageLimits `json:"limits,omitempty"`
+}
+
+// UsageLimits is the account's rolling usage windows (codex /status data).
+type UsageLimits struct {
+	Pct5h     int   `json:"pct5h"`
+	Reset5h   int64 `json:"reset5h"`
+	PctWeek   int   `json:"pctWeek"`
+	ResetWeek int64 `json:"resetWeek"`
 }
 
 func (s *Session) dto() SessionDTO {
@@ -82,10 +95,14 @@ func (s *Session) dto() SessionDTO {
 	if s.actualModel != "" {
 		model = a.PrettyModelID(s.actualModel)
 	}
+	var limits *UsageLimits
+	if s.limit5hReset > 0 || s.limitWkReset > 0 {
+		limits = &UsageLimits{Pct5h: s.limit5hPct, Reset5h: s.limit5hReset, PctWeek: s.limitWkPct, ResetWeek: s.limitWkReset}
+	}
 	return SessionDTO{
 		ID: s.ID, Name: s.name, Cwd: s.cwd, Branch: s.branch,
 		State: s.state, Recap: s.recap, Model: model, Agent: string(normalizeAgent(s.agent)), Prompt: prompt,
-		CtxTokens: s.ctxTokens, CtxMax: s.ctxMax,
+		CtxTokens: s.ctxTokens, CtxMax: s.ctxMax, Limits: limits,
 	}
 }
 
@@ -117,6 +134,12 @@ func (s *Session) setActualModel(id string) {
 func (s *Session) setContext(tokens, max int) {
 	s.mu.Lock()
 	s.ctxTokens, s.ctxMax = tokens, max
+	s.mu.Unlock()
+}
+
+func (s *Session) setLimits(pct5h int, reset5h int64, pctWk int, resetWk int64) {
+	s.mu.Lock()
+	s.limit5hPct, s.limit5hReset, s.limitWkPct, s.limitWkReset = pct5h, reset5h, pctWk, resetWk
 	s.mu.Unlock()
 }
 

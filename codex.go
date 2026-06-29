@@ -362,8 +362,17 @@ type codexTailer struct {
 	model        string
 	ctxTokens    int // last turn's input (context) tokens, from token_count events
 	ctxMax       int // model_context_window reported by codex (exact ceiling)
+	// account usage limits from token_count.rate_limits (the data behind `/status`):
+	limit5hPct, limitWkPct     int   // used percent of the 5h (primary) and weekly (secondary) windows
+	limit5hReset, limitWkReset int64 // unix resets_at for each window (0 = no data)
 	pending      map[string]string // escalated calls awaiting approval: call_id → justification
 	pendingOrder []string
+}
+
+// codexWindow is one usage-limit window from token_count.rate_limits.
+type codexWindow struct {
+	UsedPercent float64 `json:"used_percent"`
+	ResetsAt    int64   `json:"resets_at"`
 }
 
 func newCodexTailer(path string) *codexTailer {
@@ -391,6 +400,7 @@ func (t *codexTailer) reset() {
 	t.offset, t.buf = 0, nil
 	t.turnActive, t.lastAgent = false, ""
 	t.ctxTokens, t.ctxMax = 0, 0
+	t.limit5hPct, t.limitWkPct, t.limit5hReset, t.limitWkReset = 0, 0, 0, 0
 	t.pending, t.pendingOrder = map[string]string{}, nil
 }
 
@@ -460,7 +470,8 @@ func (t *codexTailer) apply(ln []byte) {
 			t.pending = map[string]string{}
 			t.pendingOrder = nil
 		case "token_count":
-			// Codex reports the live context size and the exact ceiling per turn.
+			// Codex reports the live context size + exact ceiling, and the account
+			// usage windows (primary = 5h, secondary = weekly), per turn.
 			var tc struct {
 				Info struct {
 					LastTokenUsage struct {
@@ -468,6 +479,10 @@ func (t *codexTailer) apply(ln []byte) {
 					} `json:"last_token_usage"`
 					ModelContextWindow int `json:"model_context_window"`
 				} `json:"info"`
+				RateLimits struct {
+					Primary   *codexWindow `json:"primary"`
+					Secondary *codexWindow `json:"secondary"`
+				} `json:"rate_limits"`
 			}
 			if json.Unmarshal(l.Payload, &tc) == nil {
 				if tc.Info.LastTokenUsage.InputTokens > 0 {
@@ -475,6 +490,12 @@ func (t *codexTailer) apply(ln []byte) {
 				}
 				if tc.Info.ModelContextWindow > 0 {
 					t.ctxMax = tc.Info.ModelContextWindow
+				}
+				if w := tc.RateLimits.Primary; w != nil {
+					t.limit5hPct, t.limit5hReset = int(w.UsedPercent+0.5), w.ResetsAt
+				}
+				if w := tc.RateLimits.Secondary; w != nil {
+					t.limitWkPct, t.limitWkReset = int(w.UsedPercent+0.5), w.ResetsAt
 				}
 			}
 		}

@@ -6,6 +6,7 @@
   --text:    #c9d4e0;
   --dim:     #6b7785;
   --accent:  #4aa3ff;
+  --gauge:   #5f748a; /* muted slate-blue for the usage gauges (not as bright as accent) */
   --green:   #3fb950;
   --yellow:  #e3b341;
   --red:     #f0506e;
@@ -138,8 +139,9 @@ body {
 .recap { color: var(--dim); margin-top: 4px; padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* context-window fill gauge (claude) */
 .ctxbar { height: 3px; margin: 6px 0 0 16px; background: var(--border); border-radius: 2px; overflow: hidden; }
-.ctxbar span { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width .3s; }
-.ctx-read { color: var(--dim); }
+.ctxbar span { display: block; height: 100%; border-radius: 2px; background: var(--gauge); transition: width .3s; }
+.ctx-read, .lim-read { color: var(--dim); }
+.lim-read { padding-left: 2px; }
 /* animated "Working" dots: . → .. → ... → .. → . → … */
 .recap .dots::after { content: "."; animation: working-dots 1.4s infinite; }
 @keyframes working-dots {
