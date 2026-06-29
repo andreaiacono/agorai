@@ -57,6 +57,20 @@ type Agent interface {
 	LastLine(path string) (recap, model string)
 }
 
+// unattendedArgs returns the flag that makes an agent run without asking for
+// permission/approval — claude --dangerously-skip-permissions, codex
+// --dangerously-bypass-approvals-and-sandbox, gemini --yolo.
+func unattendedArgs(agent AgentKind) []string {
+	switch normalizeAgent(agent) {
+	case AgentCodex:
+		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	case AgentGemini:
+		return []string{"--yolo"}
+	default:
+		return []string{"--dangerously-skip-permissions"}
+	}
+}
+
 // agentFor returns the Agent implementation for a kind. Unknown/empty kinds
 // resolve to claude. Codex is not implemented yet, so it also falls back for
 // now — wiring it up is the next phase.
@@ -93,7 +107,7 @@ func (claudeAgent) FreshArgs(sid, model, prompt string) []string {
 func (claudeAgent) PromptArgs(sid, model, prompt string, unattended bool) []string {
 	args := []string{"--session-id", sid}
 	if unattended {
-		args = append(args, "--dangerously-skip-permissions")
+		args = append(args, unattendedArgs(AgentClaude)...)
 	}
 	args = append(args, modelArgs(model)...)
 	return append(args, prompt)

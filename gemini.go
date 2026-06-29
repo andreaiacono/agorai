@@ -41,7 +41,7 @@ func (geminiAgent) FreshArgs(sid, model, prompt string) []string {
 func (geminiAgent) PromptArgs(sid, model, prompt string, unattended bool) []string {
 	args := []string{"--session-id", sid, "--skip-trust"}
 	if unattended {
-		args = append(args, "--yolo")
+		args = append(args, unattendedArgs(AgentGemini)...)
 	}
 	args = append(args, geminiAgent{}.ModelArgs(model)...)
 	return append(args, prompt)

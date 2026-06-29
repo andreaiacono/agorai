@@ -512,6 +512,7 @@ async function openModal(initialMode = "open", btn = null) {
   document.getElementById("modal").classList.remove("config-mode");
   document.querySelector(".model-row").style.display = "";
   populateAgentOptions(btn ? btn.agents : null);
+  document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
   resumables = []; // refetched when the Resume tab is opened
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []); // for worktree mode
   await setMode(initialMode); // selects the tab + renders the matching list
@@ -584,6 +585,7 @@ async function openConfig(b) {
   modal.classList.add("config-mode");
   document.getElementById("modal-title").textContent = b.label;
   populateAgentOptions(b.agents);
+  document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
   document.querySelector(".model-row").style.display = b.showModel === false ? "none" : "";
   await populateModels();
   renderConfigForm();
@@ -660,7 +662,7 @@ function launchConfig() {
     if (d.required && !inputs[d.id]) { alert((d.label || d.id) + " is required"); return; }
   }
   const promptEl = document.querySelector("#config-form .cfg-prompt");
-  const body = { button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel() };
+  const body = { button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel(), unattended: unattendedChecked() };
   if (promptEl) body.prompt = promptEl.value; // user-edited prompt (placeholders still filled server-side)
   createSession(body);
 }
@@ -716,7 +718,7 @@ function renderBrowse(data) {
 function launchBrowse() {
   const path = document.getElementById("browse-path").value.trim() || browsePath;
   if (!path) { alert("Choose a folder."); return; }
-  createSession({ cwd: path, mode: "browse", name: "", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
+  createSession({ cwd: path, mode: "browse", name: "", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id, unattended: unattendedChecked() });
 }
 
 function renderList() {
@@ -767,6 +769,7 @@ let modelList = [];
 function selectedAgent() {
   return document.querySelector('input[name="agent"]:checked')?.value || ""; // "" = nothing picked
 }
+function unattendedChecked() { return document.getElementById("unattended-chk").checked; }
 async function populateModels() {
   // Models are per-agent. Until an agent is picked there's nothing to list.
   const agent = selectedAgent();
@@ -808,7 +811,7 @@ function selectedModel() {
 }
 
 function launchRepo(r) {
-  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id });
+  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id, unattended: unattendedChecked() });
 }
 function launchResume(r) {
   const fork = document.getElementById("fork-chk").checked;

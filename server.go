@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,6 +169,11 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		full := filepath.Join(abs, e.Name())
 		dirs = append(dirs, dirent{Name: e.Name(), Path: full, Repo: isGitRepo(full)})
 	}
+	// Case-insensitive sort so the listing isn't split into upper- then lower-case
+	// blocks (os.ReadDir returns raw byte order).
+	sort.Slice(dirs, func(i, j int) bool {
+		return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name)
+	})
 
 	parent := filepath.Dir(abs)
 	if parent == abs {
@@ -232,10 +238,11 @@ type createReq struct {
 	GitInit   bool      `json:"gitInit"`   // for "newdir": run `git init`
 	Agent     AgentKind `json:"agent"`     // "" | "claude" | "codex" | "gemini"
 	// config-driven buttons (mode "config"):
-	Button  string            `json:"button"`  // button id from /api/buttons
-	Variant string            `json:"variant"` // chosen variant id (if the button has variants)
-	Inputs  map[string]string `json:"inputs"`  // input id → value
-	Prompt  string            `json:"prompt"`  // optional edited prompt (overrides the button's template; placeholders still filled)
+	Button     string            `json:"button"`     // button id from /api/buttons
+	Variant    string            `json:"variant"`    // chosen variant id (if the button has variants)
+	Inputs     map[string]string `json:"inputs"`     // input id → value
+	Prompt     string            `json:"prompt"`     // optional edited prompt (overrides the button's template; placeholders still filled)
+	Unattended bool              `json:"unattended"` // launch the agent without permission prompts (checkbox; defaults to the button's setting)
 }
 
 // reviewCommentsSuffix is appended to both review prompts: after the analysis,
@@ -313,12 +320,15 @@ func prepareAgent(agent AgentKind, cwd string) {
 // assign (--session-id → adopt now); codex mints its own (learn it after spawn).
 // Used by the open / newdir / scratch flows; review and ticket build their own
 // claude-specific args.
-func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model string) {
+func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model string, unattended bool) {
 	agent = normalizeAgent(agent)
 	a := agentFor(agent)
 	prepareAgent(agent, cwd)
 	sid := newUUID() // used only when the agent accepts an assigned id (claude)
 	args := a.FreshArgs(sid, model, "")
+	if unattended {
+		args = append(args, unattendedArgs(agent)...)
+	}
 	sess, err := s.mgr.SpawnAs(agent, cwd, name, branch, args...)
 	if err != nil {
 		http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
@@ -367,17 +377,21 @@ func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name
 // (with {workspace}/{dir} placeholders); otherwise it's a plain session named
 // after the dir. This is what makes the picker config-expressible.
 func (s *Server) startPicked(w http.ResponseWriter, req createReq, model, cwd, name, branch string) {
+	// The checkbox is an opt-in (always starts off); OR it with the button's own
+	// setting so reviews still run unattended even with the box unchecked.
+	unattended := req.Unattended
 	if btn := findButton(req.Button); btn != nil {
+		unattended = unattended || btn.Unattended
 		vals := map[string]string{"workspace": cwd, "dir": filepath.Base(cwd)}
 		if btn.SessionName != "" {
 			name = fillTemplate(btn.SessionName, vals)
 		}
 		if btn.Prompt != "" {
-			s.startPrompted(w, req.Agent, cwd, name, branch, model, fillTemplate(btn.Prompt, vals), name+"…", btn.Unattended, btn.ExcludeEnv)
+			s.startPrompted(w, req.Agent, cwd, name, branch, model, fillTemplate(btn.Prompt, vals), name+"…", unattended, btn.ExcludeEnv)
 			return
 		}
 	}
-	s.startSession(w, req.Agent, cwd, name, branch, model)
+	s.startSession(w, req.Agent, cwd, name, branch, model, unattended)
 }
 
 // handleConfigLaunch spawns a session from a configurable button (/api/buttons):
@@ -427,11 +441,13 @@ func (s *Server) handleConfigLaunch(w http.ResponseWriter, req createReq, model 
 		name = btn.Label
 	}
 
+	// Opt-in checkbox OR the button's own setting (reviews stay unattended).
+	unattended := req.Unattended || btn.Unattended
 	if prompt != "" {
-		s.startPrompted(w, req.Agent, cwd, name, "", model, prompt, name+"…", btn.Unattended, btn.ExcludeEnv)
+		s.startPrompted(w, req.Agent, cwd, name, "", model, prompt, name+"…", unattended, btn.ExcludeEnv)
 		return
 	}
-	s.startSession(w, req.Agent, cwd, name, "", model)
+	s.startSession(w, req.Agent, cwd, name, "", model, unattended)
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

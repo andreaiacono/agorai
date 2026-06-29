@@ -47,7 +47,7 @@ func (codexAgent) FreshArgs(_, model, prompt string) []string {
 func (codexAgent) PromptArgs(_, model, prompt string, unattended bool) []string {
 	args := []string{"--no-alt-screen"}
 	if unattended {
-		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		args = append(args, unattendedArgs(AgentCodex)...)
 	}
 	args = append(args, codexAgent{}.ModelArgs(model)...)
 	return append(args, prompt)

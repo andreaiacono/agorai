@@ -69,6 +69,7 @@
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
       <div class="agent-row"><span>Agent</span><div class="agent-opts" id="agent-opts"></div></div>
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
+      <label class="perm-row"><input type="checkbox" id="unattended-chk"> Run without permission prompts <small>· auto-approves everything (YOLO)</small></label>
       <div class="browse-form">
         <div class="browse-bar">
           <button type="button" class="browse-up" onclick="browseUp()" title="Parent folder">↑</button>
