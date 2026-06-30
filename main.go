@@ -36,6 +36,17 @@ func main() {
 	store := newStore()
 	cfg := newConfigStore()
 	mgr := NewManager(store, cfg)
+
+	// Wire claude's statusLine to agorai so Pro/Max account usage limits show up
+	// beside context fill. Best-effort — failure just means no Claude limits.
+	if home, err := os.UserHomeDir(); err == nil {
+		if sp, us, err := setupClaudeUsage(home); err != nil {
+			log.Printf("claude usage statusline setup failed: %v", err)
+		} else {
+			mgr.statuslineSettings, mgr.userStatusline = sp, us
+		}
+	}
+
 	hub := newHub()
 	srv := &Server{mgr: mgr, hub: hub, roots: roots, cfg: cfg}
 

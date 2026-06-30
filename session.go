@@ -48,6 +48,7 @@ type Session struct {
 	promptOpts  []PromptOption // parsed options for a permission prompt
 	resumeOf    string         // claude id we resumed from; cleaned up once the live id is known
 	tailing     bool           // a codex rollout-state tailer is running for this session
+	pendingGoal string         // a "/goal …" directive to inject after the first turn (New-PR goal)
 	ptmx        *os.File
 	cmd         *exec.Cmd
 	ring        *ringBuffer
@@ -71,6 +72,8 @@ type SessionDTO struct {
 	CtxMax    int `json:"ctxMax,omitempty"`
 	// Account usage limits (codex only; absent for claude — not readable from disk).
 	Limits *UsageLimits `json:"limits,omitempty"`
+	// A /goal condition queued at launch (New PR), awaiting the user's "Start goal".
+	PendingGoal string `json:"pendingGoal,omitempty"`
 }
 
 // UsageLimits is the account's rolling usage windows (codex /status data).
@@ -102,7 +105,7 @@ func (s *Session) dto() SessionDTO {
 	return SessionDTO{
 		ID: s.ID, Name: s.name, Cwd: s.cwd, Branch: s.branch,
 		State: s.state, Recap: s.recap, Model: model, Agent: string(normalizeAgent(s.agent)), Prompt: prompt,
-		CtxTokens: s.ctxTokens, CtxMax: s.ctxMax, Limits: limits,
+		CtxTokens: s.ctxTokens, CtxMax: s.ctxMax, Limits: limits, PendingGoal: s.pendingGoal,
 	}
 }
 
@@ -222,6 +225,22 @@ func (s *Session) removeClient(ch chan []byte) {
 	s.mu.Unlock()
 }
 
+func (s *Session) setPendingGoal(g string) {
+	s.mu.Lock()
+	s.pendingGoal = g
+	s.mu.Unlock()
+}
+
+// takePendingGoal returns the queued goal directive and clears it (one-shot), so
+// it's injected exactly once — on the first turn boundary after spawn.
+func (s *Session) takePendingGoal() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.pendingGoal
+	s.pendingGoal = ""
+	return g
+}
+
 func (s *Session) writeInput(p []byte) {
 	s.mu.Lock()
 	f := s.ptmx
@@ -318,6 +337,13 @@ type Manager struct {
 	store    *Store
 	cfg      *ConfigStore
 	onChange func()
+
+	// Claude usage wiring (set at startup). statuslineSettings is a --settings
+	// file that points claude's statusLine at agorai's forwarder; userStatusline
+	// is the user's own statusLine command, re-run by the forwarder so the
+	// terminal view stays transparent.
+	statuslineSettings string
+	userStatusline     string
 }
 
 func NewManager(store *Store, cfg *ConfigStore) *Manager {
@@ -344,6 +370,9 @@ func (m *Manager) buildEnv(launchID string, exclude ...string) []string {
 	}
 	base["AGORAI_ID"] = launchID
 	base["TERM"] = "xterm-256color"
+	if m.userStatusline != "" {
+		base["AGORAI_USER_STATUSLINE"] = m.userStatusline // chained by the statusline forwarder
+	}
 	out := make([]string, 0, len(base))
 	for k, v := range base {
 		out = append(out, k+"="+v)
@@ -396,7 +425,15 @@ func (m *Manager) spawn(agent AgentKind, id, cwd, name, branch string, excludeEn
 		id = newID()
 	}
 
-	cmd := exec.Command(agentFor(agent).Command(), extraArgs...)
+	args := extraArgs
+	// Claude reports account usage limits only through its statusLine; point it at
+	// agorai's forwarder via a --settings overlay (layers on top of the user's
+	// settings, so their hooks/permissions still apply).
+	if agent == AgentClaude && m.statuslineSettings != "" {
+		args = append([]string{"--settings", m.statuslineSettings}, args...)
+	}
+
+	cmd := exec.Command(agentFor(agent).Command(), args...)
 	cmd.Dir = cwd
 	cmd.Env = m.buildEnv(id, excludeEnv...)
 

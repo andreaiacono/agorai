@@ -89,19 +89,65 @@ body {
 /* split */
 .split { flex: 1; display: flex; min-height: 0; }
 
-/* sidebar */
+/* sidebar — flex column: fixed quota panel + scrolling session list */
 .sidebar {
   width: 340px; flex: none;
   background: var(--panel);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 8px;
+  display: flex; flex-direction: column; min-height: 0;
 }
+#session-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+
+/* per-agent account-quota panel (quota is account-level, not per session) */
+.quota-panel {
+  flex: none; padding: 11px 12px 12px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border-bottom: 1px solid var(--border);
+}
+/* two boxes: the 5h window and the 7d window, split by a divider */
+.quota-box + .quota-box { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); }
+.quota-head {
+  color: var(--dim); text-transform: uppercase;
+  letter-spacing: 1.2px; font-size: 10px; font-weight: 600; margin-bottom: 6px;
+}
+.quota-head small { letter-spacing: 0; opacity: .7; }
+/* one line per agent: icon · name · gauge · (percent · resets-in). Row 16 +
+   margin 4 = 20px stride stays whole at 1.25/1.5/2× so the bars match thickness. */
+.qrow { display: flex; align-items: center; gap: 8px; height: 16px; margin-top: 4px; }
+.qrow .agent-ic { flex: none; }
+.qrow .agent-ic svg { width: 13px; height: 13px; display: block; }
+.qname { flex: none; width: 44px; font-size: 11px; color: var(--text); white-space: nowrap; }
+.qbar {
+  flex: 1; min-width: 30px; height: 6px; border-radius: 4px; overflow: hidden;
+  background: var(--border);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, .25);
+}
+.qbar span {
+  display: block; height: 100%; border-radius: 4px;
+  transition: width .35s ease;
+  box-shadow: 0 0 6px -1px currentColor;
+}
+.qmeta { flex: none; width: 138px; text-align: right; white-space: nowrap; font-size: 10px; color: var(--dim); font-feature-settings: "tnum"; }
+.qmeta b { font-weight: 700; }
+.qrow-empty .qname, .qrow-empty .qmeta { color: var(--dim); font-weight: 400; }
+.qrow-empty .agent-ic { opacity: .4; }
+
 .side-head { display: flex; align-items: center; padding: 8px 8px 6px; }
 .side-head .ttl {
   flex: 1; color: var(--dim); text-transform: uppercase;
   letter-spacing: 1px; font-size: 10px;
 }
+.bulk { display: inline-flex; align-items: center; gap: 6px; }
+.bulk-n { color: var(--dim); font-size: 10px; }
+.bulk-del, .bulk-clear {
+  font: inherit; font-size: 10px; cursor: pointer;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px;
+}
+.bulk-del { color: var(--red); border-color: rgba(240, 80, 110, .4); }
+.bulk-del:hover { background: var(--red); color: #1a0b0e; border-color: var(--red); }
+.bulk-clear { padding: 2px 6px; }
+.bulk-clear:hover { border-color: var(--accent); }
 .new-btn {
   font: inherit; font-size: 11px;
   background: var(--panel-2); color: var(--text);
@@ -119,7 +165,7 @@ body {
 .session:hover { background: var(--panel-2); }
 .session.selected { background: var(--panel-2); border-color: var(--accent); }
 .session.dragging { opacity: .5; border-color: var(--accent); border-style: dashed; cursor: grabbing; }
-.session .row1 { display: flex; align-items: center; gap: 8px; }
+.session .row1 { display: flex; align-items: center; gap: 8px; height: 18px; }
 
 /* Four buckets:
    - perm → red (blinks) : a permission prompt is waiting for your answer
@@ -131,14 +177,29 @@ body {
 .session.working .dot { background: var(--yellow); }
 .session.unread:not(.perm) .dot { background: var(--green); }
 
-.name { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.name { font-weight: 600; line-height: 18px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .x { color: var(--dim); flex: none; opacity: 0; padding: 0 2px; font-size: 11px; transition: opacity .1s, color .1s; }
 .session:hover .x { opacity: 1; }
 .x:hover { color: var(--red); }
+/* bulk-select checkbox: subtle until hovered/ticked, reserves its column so rows
+   don't shift. */
+.session .sel {
+  flex: none; width: 13px; height: 13px; margin: 0; cursor: pointer;
+  accent-color: var(--accent); opacity: .35; transition: opacity .12s;
+}
+.session:hover .sel, .session.checked .sel { opacity: 1; }
+.session.checked { background: rgba(74, 163, 255, .10); border-color: var(--accent); }
 .branch { color: var(--dim); font-weight: 400; }
-.recap { color: var(--dim); margin-top: 4px; padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* context-window fill gauge (claude) */
-.ctxbar { height: 3px; margin: 6px 0 0 16px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.recap { color: var(--dim); line-height: 16px; margin-top: 4px; padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* context-window fill gauge (claude).
+   Integer line-heights above (row1 18, recap 16) + this row (12) make each card
+   advance by exactly 80px — a multiple of 4, so it stays whole at 1.25/1.5/2×
+   display scaling and every card's gauge lands on the same device-pixel grid.
+   Without that, 1.5×13px=19.5px line-heights drift cards by half a device pixel
+   and the bars render at visibly different thicknesses. */
+.ctxrow { display: flex; align-items: center; gap: 6px; height: 12px; margin: 4px 0 0 16px; }
+.ctxlabel { flex: none; width: 78px; color: var(--dim); font-size: 10px; line-height: 12px; white-space: nowrap; }
+.ctxbar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
 .ctxbar span { display: block; height: 100%; border-radius: 2px; background: var(--gauge); transition: width .3s; }
 .ctx-read, .lim-read { color: var(--dim); }
 .lim-read { padding-left: 2px; }
@@ -205,6 +266,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 .term-head .t-name { font-weight: 600; }
 .term-head .t-cwd { color: var(--dim); }
 .term-head .t-right { margin-left: auto; color: var(--dim); }
+.goal-start {
+  font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  background: var(--accent); color: #06121f;
+  border: 1px solid var(--accent); border-radius: 6px; padding: 2px 9px;
+}
+.goal-start:hover { filter: brightness(1.08); }
+.goal-start[hidden] { display: none; }
 
 #term-host { flex: 1; position: relative; background: #0a0d12; min-height: 0; }
 .term-pane { position: absolute; inset: 0; padding: 6px; display: none; }
@@ -236,6 +304,18 @@ body.resizing { cursor: col-resize; user-select: none; }
 .perm-row { display: flex; align-items: center; gap: 7px; margin: 0 16px 10px; color: var(--text); font-size: 11px; cursor: pointer; }
 .perm-row small { color: var(--dim); }
 .modal.resume-mode .perm-row { display: none; } /* resume re-opens an existing session; no launch flags */
+
+.goal-row { display: flex; flex-direction: column; gap: 4px; margin: 0 16px 10px; }
+.goal-row[hidden] { display: none; } /* keep the hidden attribute authoritative over the flex display */
+.goal-row > span { color: var(--text); font-size: 11px; }
+.goal-row small { color: var(--dim); }
+.goal-row code { color: var(--accent); font-size: 10px; }
+.goal-row textarea {
+  font: inherit; font-size: 12px; resize: vertical; min-height: 40px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+}
+.goal-row textarea:focus { outline: none; border-color: var(--accent); }
 .agent-opts { display: flex; gap: 14px; }
 .agent-opt { display: flex; align-items: center; gap: 5px; color: var(--text); cursor: pointer; }
 .agent-opt input { cursor: pointer; margin: 0; }

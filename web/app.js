@@ -12,9 +12,11 @@ const state = {
   unread: new Set(),       // sessions that completed (working→idle) but aren't viewed yet
   prevStates: {},          // id -> last seen state, for transition detection
   order: [],               // user's drag-reorder of the rows (ids), persisted in localStorage
+  checked: new Set(),      // sessions ticked for bulk actions (multi-delete)
 };
 
 let dragId = null;         // id of the row being dragged (null when not dragging)
+let lastCheckedId = null;  // anchor for shift-click range selection
 
 /* ---------- control WebSocket: state in, commands out ---------- */
 
@@ -44,6 +46,7 @@ function connectControl() {
       }
       state.sessions = next;
       renderSessions();
+      renderQuota();
     }
   };
   controlWs.onclose = () => setTimeout(connectControl, 1000); // reconnect
@@ -79,11 +82,16 @@ function orderedSessions() {
 
 function renderSessions() {
   if (dragId) return; // don't rebuild mid-drag — a WS update would yank the dragged row
+  // Drop selections for sessions that no longer exist (closed elsewhere).
+  const live = new Set(state.sessions.map((s) => s.id));
+  for (const id of state.checked) if (!live.has(id)) state.checked.delete(id);
+
   const list = document.getElementById("session-list");
   list.innerHTML = "";
   for (const s of orderedSessions()) {
     list.appendChild(sessionCard(s));
   }
+  renderBulk();
   updateTermHead(); // keep the focused session's context readout current
   disposeStaleTerminals();
   // "needs attention" = a pending permission, or anything that wants you and
@@ -126,48 +134,112 @@ function fmtTokens(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n
 function ctxBar(s) {
   if (!s.ctxTokens || !s.ctxMax) return "";
   const pct = ctxPct(s);
-  return `<div class="ctxbar" title="Context ${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} (${pct}%)">` +
-    `<span style="width:${pct}%"></span></div>`;
+  return `<div class="ctxrow" title="Context ${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} (${pct}%)">` +
+    `<small class="ctxlabel">Context usage</small>` +
+    `<div class="ctxbar"><span style="width:${pct}%"></span></div></div>`;
 }
 function ctxReadout(s) {
   if (!s.ctxTokens || !s.ctxMax) return "";
   const pct = ctxPct(s);
   return ` · <span class="ctx-read">${fmtTokens(s.ctxTokens)} / ${fmtTokens(s.ctxMax)} ctx · ${pct}%</span>`;
 }
-// Account usage limits (codex only) — the 5h + weekly rolling windows from /status.
-function fmtReset(epoch) {
-  if (!epoch) return "?";
-  const mins = Math.round((epoch * 1000 - Date.now()) / 60000);
-  if (mins <= 0) return "now";
-  if (mins < 60) return mins + "m";
-  const h = Math.floor(mins / 60);
-  return h < 24 ? h + "h" : Math.floor(h / 24) + "d";
+// Account quota is per-agent (the same across all of that agent's sessions), so
+// it lives in one panel atop the sidebar, not on each card. limits come from
+// codex (always) and claude (once its statusLine reports — Pro/Max only); gemini
+// has none. Pick the first session per agent that reports limits.
+// Gemini omitted: its quota isn't readable under api-key auth (no local file; the
+// only source is an OAuth-only `retrieveUserQuota` Code Assist call we don't use).
+const QUOTA_AGENTS = [
+  { key: "claude", label: "Claude", color: "#d97757" }, // anthropic coral
+  { key: "codex", label: "Codex", color: "#2dd4bf" },   // teal (clear of state green)
+];
+function agentLimits() {
+  const out = {};
+  for (const s of state.sessions) {
+    if (s.limits && !out[s.agent]) out[s.agent] = s.limits;
+  }
+  return out;
 }
-function limitReadout(s) {
-  const l = s.limits;
-  if (!l) return "";
-  const parts = [];
-  if (l.reset5h) parts.push(`5h ${l.pct5h}%`);
-  if (l.resetWeek) parts.push(`wk ${l.pctWeek}%`);
-  if (!parts.length) return "";
-  const tip = `Account usage limits. 5h window resets in ${fmtReset(l.reset5h)}, weekly in ${fmtReset(l.resetWeek)}.`;
-  return ` · <span class="lim-read" title="${tip}">usage ${parts.join(" · ")}</span>`;
+// Two boxes — the 5-hour window and the weekly window — each with a per-agent
+// gauge and a live "resets in" countdown.
+const QUOTA_WINDOWS = [
+  { label: "Current usage", sub: "5h", pct: "pct5h", reset: "reset5h" },
+  { label: "Weekly usage", sub: "7d", pct: "pctWeek", reset: "resetWeek" },
+];
+function renderQuota() {
+  const byAgent = agentLimits();
+  let html = "";
+  for (const win of QUOTA_WINDOWS) {
+    html += `<div class="quota-box"><div class="quota-head">${win.label} <small>· ${win.sub}</small></div>`;
+    for (const { key, label, color } of QUOTA_AGENTS) {
+      const l = byAgent[key];
+      const reset = l ? l[win.reset] : 0;
+      const icon = agentIcon(key);
+      if (!l || !reset) {
+        html += `<div class="qrow qrow-empty">${icon}<span class="qname">${label}</span>` +
+          `<div class="qbar"></div><span class="qmeta">—</span></div>`;
+        continue;
+      }
+      const pct = Math.min(100, l[win.pct] || 0);
+      const tip = `${label} ${win.label.toLowerCase()} (${win.sub}) · ${pct}% used · resets in ${fmtRemaining(reset)}`;
+      html += `<div class="qrow" title="${esc(tip)}">${icon}<span class="qname">${label}</span>` +
+        `<div class="qbar"><span style="width:${pct}%;background:${color};color:${color}"></span></div>` +
+        `<span class="qmeta"><b style="color:${color}">${pct}%</b> · <span class="qreset" data-reset="${reset}">Resets in ${fmtRemaining(reset)}</span></span></div>`;
+    }
+    html += `</div>`;
+  }
+  document.getElementById("quota-panel").innerHTML = html;
 }
 
+// Remaining time until a usage window resets, as "Xd Yh" / "Xh Ym" / "Xm".
+function fmtRemaining(epoch) {
+  if (!epoch) return "—";
+  let secs = epoch - Math.floor(Date.now() / 1000);
+  if (secs <= 0) return "now";
+  const d = Math.floor(secs / 86400); secs -= d * 86400;
+  const h = Math.floor(secs / 3600); secs -= h * 3600;
+  const m = Math.floor(secs / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Refresh just the reset countdowns once a minute — the percentages only change
+// when a new control-WS snapshot arrives, but the countdowns tick on their own.
+function tickQuotaResets() {
+  document.querySelectorAll("#quota-panel .qreset").forEach((el) => {
+    const r = +el.dataset.reset;
+    if (r) el.textContent = "Resets in " + fmtRemaining(r);
+  });
+}
+setInterval(tickQuotaResets, 60000);
 // Refresh the focused session's header (name/cwd/model + live context readout).
 // Called on select and on every render so the readout tracks each turn.
 function updateTermHead() {
   const s = state.sessions.find((x) => x.id === state.selected);
+  // "Start goal" appears only while a launch-time goal is still pending (New PR).
+  const gb = document.getElementById("goal-start-btn");
+  gb.hidden = !(s && s.pendingGoal);
+  if (s && s.pendingGoal) gb.title = "Start Claude's /goal now — loop toward: " + s.pendingGoal;
   if (!s) return;
   document.getElementById("t-name").textContent = s.name;
   document.getElementById("t-cwd").textContent = s.cwd + " · " + s.branch;
-  document.getElementById("t-right").innerHTML = "Model: " + esc(s.model) + ctxReadout(s) + limitReadout(s);
+  document.getElementById("t-right").innerHTML = "Model: " + esc(s.model) + ctxReadout(s);
+}
+
+// Submit the session's queued /goal condition now (user clicked "Start goal"
+// after the plan/clarification phase). The server injects it and re-broadcasts,
+// which clears the pending chip.
+function startPendingGoal() {
+  if (!state.selected) return;
+  fetch(`/api/sessions/${state.selected}/goal`, { method: "POST" }).catch(() => {});
 }
 
 function sessionCard(s) {
   const el = document.createElement("div");
   el.className = "session " + s.state
     + (s.id === state.selected ? " selected" : "")
+    + (state.checked.has(s.id) ? " checked" : "")
     + (state.unread.has(s.id) ? " unread" : "");
   el.onclick = () => selectSession(s.id);
 
@@ -180,6 +252,7 @@ function sessionCard(s) {
 
   el.innerHTML = `
     <div class="row1">
+      <input type="checkbox" class="sel" ${state.checked.has(s.id) ? "checked" : ""} title="Select for bulk delete">
       ${agentIcon(s.agent)}
       <span class="name" title="${esc(s.name)}">${esc(s.name)} <span class="branch">· ${esc(s.branch)}</span></span>
       ${badge}
@@ -188,6 +261,9 @@ function sessionCard(s) {
     <div class="recap">${recap}</div>
     ${ctxBar(s)}`;
 
+  const sel = el.querySelector(".sel");
+  sel.onmousedown = (ev) => ev.stopPropagation(); // don't begin a row drag
+  sel.onclick = (ev) => { ev.stopPropagation(); toggleChecked(s.id, ev.target.checked, ev.shiftKey); };
   el.querySelector(".x").onclick = (ev) => { ev.stopPropagation(); closeSession(s.id); };
   el.querySelector(".name").ondblclick = (ev) => { ev.stopPropagation(); renameSession(s.id, s.name); };
 
@@ -471,9 +547,57 @@ async function renameSession(id, current) {
 }
 
 async function closeSession(id) {
-  if (!confirm("Close this session? It won't be resumed on restart.")) return;
+  const s = state.sessions.find((x) => x.id === id);
+  const name = s && s.name ? `“${s.name}”` : "this session";
+  if (!confirm(`Close ${name}? It won't be resumed on restart.`)) return;
   await fetch(`/api/sessions/${id}`, { method: "DELETE" }).catch(() => {});
   // the control WS broadcast will drop it from the list; disposeStaleTerminals cleans up
+}
+
+/* ---------- bulk selection (multi-delete) ---------- */
+
+// Toggle a row's checkbox; shift-click extends the range from the last toggle.
+function toggleChecked(id, checked, shift) {
+  if (shift && lastCheckedId) {
+    const ids = orderedSessions().map((s) => s.id);
+    const a = ids.indexOf(lastCheckedId), b = ids.indexOf(id);
+    if (a !== -1 && b !== -1) {
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      for (let i = lo; i <= hi; i++) checked ? state.checked.add(ids[i]) : state.checked.delete(ids[i]);
+    }
+  } else {
+    checked ? state.checked.add(id) : state.checked.delete(id);
+  }
+  lastCheckedId = id;
+  renderSessions();
+}
+
+function clearChecked() {
+  state.checked.clear();
+  lastCheckedId = null;
+  renderSessions();
+}
+
+// The bulk-action bar in the sidebar header — shown only while something's ticked.
+function renderBulk() {
+  const bar = document.getElementById("bulk-bar");
+  const n = state.checked.size;
+  if (!n) { bar.hidden = true; bar.innerHTML = ""; return; }
+  bar.hidden = false;
+  bar.innerHTML = `<span class="bulk-n">${n} selected</span>` +
+    `<button class="bulk-del" onclick="deleteChecked()" title="Close the selected sessions">Delete</button>` +
+    `<button class="bulk-clear" onclick="clearChecked()" title="Clear selection">✕</button>`;
+}
+
+async function deleteChecked() {
+  const ids = [...state.checked];
+  if (!ids.length) return;
+  if (!confirm(`Close ${ids.length} session${ids.length > 1 ? "s" : ""}? They won't be resumed on restart.`)) return;
+  await Promise.all(ids.map((id) => fetch(`/api/sessions/${id}`, { method: "DELETE" }).catch(() => {})));
+  state.checked.clear();
+  lastCheckedId = null;
+  // the control WS broadcast drops them and re-renders; clear now for snappiness
+  renderSessions();
 }
 
 // Tear down xterm instances + sockets for sessions no longer in the list, to
@@ -513,6 +637,7 @@ async function openModal(initialMode = "open", btn = null) {
   document.querySelector(".model-row").style.display = "";
   populateAgentOptions(btn ? btn.agents : null);
   document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
+  document.getElementById("goal-input").value = "";          // goals don't carry over between dialogs
   resumables = []; // refetched when the Resume tab is opened
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []); // for worktree mode
   await setMode(initialMode); // selects the tab + renders the matching list
@@ -541,6 +666,7 @@ async function setMode(m) {
   // the model list so it matches the agent that will actually run.
   if (m === "worktree") setAgent("claude");
   await populateModels();
+  updateGoalVisibility(); // goal applies to open/worktree, not resume
   document.getElementById("search").placeholder = m === "resume" ? "Filter past sessions…" : "Filter repos…";
 
   if (m === "resume") {
@@ -586,8 +712,10 @@ async function openConfig(b) {
   document.getElementById("modal-title").textContent = b.label;
   populateAgentOptions(b.agents);
   document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
+  document.getElementById("goal-input").value = "";          // goals don't carry over between dialogs
   document.querySelector(".model-row").style.display = b.showModel === false ? "none" : "";
   await populateModels();
+  updateGoalVisibility(); // only the New PR config button gets a goal
   renderConfigForm();
 }
 
@@ -662,7 +790,7 @@ function launchConfig() {
     if (d.required && !inputs[d.id]) { alert((d.label || d.id) + " is required"); return; }
   }
   const promptEl = document.querySelector("#config-form .cfg-prompt");
-  const body = { button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel(), unattended: unattendedChecked() };
+  const body = { button: b.id, variant: variant ? variant.id : "", inputs, agent: selectedAgent(), model: selectedModel(), unattended: unattendedChecked(), goal: goalValue() };
   if (promptEl) body.prompt = promptEl.value; // user-edited prompt (placeholders still filled server-side)
   createSession(body);
 }
@@ -718,7 +846,7 @@ function renderBrowse(data) {
 function launchBrowse() {
   const path = document.getElementById("browse-path").value.trim() || browsePath;
   if (!path) { alert("Choose a folder."); return; }
-  createSession({ cwd: path, mode: "browse", name: "", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id, unattended: unattendedChecked() });
+  createSession({ cwd: path, mode: "browse", name: "", model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id, unattended: unattendedChecked(), goal: goalValue() });
 }
 
 function renderList() {
@@ -770,6 +898,21 @@ function selectedAgent() {
   return document.querySelector('input[name="agent"]:checked')?.value || ""; // "" = nothing picked
 }
 function unattendedChecked() { return document.getElementById("unattended-chk").checked; }
+
+// The Goal field (a Claude /goal completion condition) only applies to dialogs
+// that start fresh work: New Session (open/worktree, not resume) and the New PR
+// button. It's claude-only — other agents have no /goal command.
+function goalApplies() {
+  if (selectedAgent() !== "claude") return false;
+  if (mode === "config") return !!(configBtn && configBtn.id === "new-pr");
+  return mode === "open" || mode === "worktree";
+}
+function updateGoalVisibility() {
+  document.getElementById("goal-row").hidden = !goalApplies();
+}
+function goalValue() {
+  return goalApplies() ? document.getElementById("goal-input").value.trim() : "";
+}
 async function populateModels() {
   // Models are per-agent. Until an agent is picked there's nothing to list.
   const agent = selectedAgent();
@@ -791,6 +934,7 @@ async function populateModels() {
 }
 async function onAgentChange() {
   await populateModels(); // swap the model list to match the chosen agent
+  updateGoalVisibility(); // the goal field is claude-only
   if (mode === "resume") { // re-list past sessions for the newly selected agent
     resumables = await fetchResumables();
     renderList();
@@ -811,7 +955,7 @@ function selectedModel() {
 }
 
 function launchRepo(r) {
-  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id, unattended: unattendedChecked() });
+  createSession({ cwd: r.path, mode, name: r.name, model: selectedModel(), agent: selectedAgent(), button: pickBtn && pickBtn.id, unattended: unattendedChecked(), goal: goalValue() });
 }
 function launchResume(r) {
   const fork = document.getElementById("fork-chk").checked;
@@ -1130,6 +1274,19 @@ initDragReorder();
 renderTopBar();
 loadConfig();
 connectControl();
+
+// Deep-link: agorai/#session=<id> focuses that session — used by the GNOME
+// top-bar extension's "Open" actions. The session may not be in the control-WS
+// snapshot yet, so retry briefly until it appears.
+function selectFromHash(tries = 0) {
+  const m = location.hash.match(/session=([\w-]+)/);
+  if (!m) return;
+  const id = m[1];
+  if (state.sessions.some((s) => s.id === id)) selectSession(id);
+  else if (tries < 50) setTimeout(() => selectFromHash(tries + 1), 100);
+}
+window.addEventListener("hashchange", () => selectFromHash());
+selectFromHash();
 
 // Glyphs for the named icons used in buttons.json.
 const BUTTON_ICONS = { plus: "+", ticket: "✦", review: "⊚", resume: "↻" };

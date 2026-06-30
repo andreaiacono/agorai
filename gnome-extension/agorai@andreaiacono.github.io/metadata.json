@@ -1,0 +1,8 @@
+{
+  "uuid": "agorai@andreaiacono.github.io",
+  "name": "agorai",
+  "description": "Top-bar indicator and desktop notifications for agorai sessions. Shows how many of your running Claude Code / Codex / Gemini sessions need attention, lets you jump straight to one, and notifies you when a session asks for permission or finishes a turn.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "url": "https://github.com/andreaiacono/agorai",
+  "version": 1
+}

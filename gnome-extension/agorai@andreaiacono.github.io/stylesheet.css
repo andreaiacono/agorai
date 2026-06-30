@@ -1,0 +1,18 @@
+.agorai-count {
+    font-weight: bold;
+    font-size: 0.9em;
+    padding-left: 3px;
+}
+
+.agorai-recap {
+    color: #9aa3ad;
+    font-size: 0.85em;
+    padding-left: 12px;
+}
+
+.agorai-usage {
+    color: #6b7785;
+    font-size: 0.8em;
+    font-feature-settings: "tnum";
+    padding-left: 14px;
+}

@@ -47,8 +47,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("PATCH /api/sessions/{id}", s.handleRenameSession)
+	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleActivateGoal)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /hook", s.handleHook)
+	mux.HandleFunc("POST /api/usage", s.handleUsage)
 	mux.HandleFunc("GET /ws/control", s.handleControlWS)
 	mux.HandleFunc("GET /ws/pty/{id}", s.handlePtyWS)
 
@@ -224,6 +226,24 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.mgr.List())
 }
 
+// handleActivateGoal submits the session's pending /goal condition now (user
+// clicked "Start goal" once the plan/clarification phase was done).
+func (s *Server) handleActivateGoal(w http.ResponseWriter, r *http.Request) {
+	sess := s.mgr.Get(r.PathValue("id"))
+	if sess == nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	cond := sess.takePendingGoal()
+	if cond == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	sess.writeInput([]byte("/goal " + cond + "\r"))
+	s.broadcastSessions() // the pending-goal chip clears once the DTO no longer carries it
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type createReq struct {
 	Cwd       string    `json:"cwd"`
 	Mode      string    `json:"mode"` // "open" | "worktree" | "resume" | "review" | "newdir" | "scratch" | "ticket"
@@ -243,6 +263,7 @@ type createReq struct {
 	Inputs     map[string]string `json:"inputs"`     // input id → value
 	Prompt     string            `json:"prompt"`     // optional edited prompt (overrides the button's template; placeholders still filled)
 	Unattended bool              `json:"unattended"` // launch the agent without permission prompts (checkbox; defaults to the button's setting)
+	Goal       string            `json:"goal"`       // claude only: an overarching objective, injected as a persistent system prompt
 }
 
 // reviewCommentsSuffix is appended to both review prompts: after the analysis,
@@ -283,6 +304,7 @@ const ticketPlanPromptTemplate = "I want to start working on Linear ticket {tick
 	"Then give me a clear, actionable implementation plan for building it: the approach, the files to change, edge cases and tests to consider, and the concrete steps in order. " +
 	"Also consider whether the feature should emit usage metrics so we can tell whether it's actually being used, and if so call that out in the plan. " +
 	"Treat the ticket description as the source of truth for the desired end state. " +
+	"Committing, pushing, and creating the PR each require my explicit confirmation first (as the guardrail below states) — never do them on your own. When you do create the PR, its title MUST include the ticket number {ticket} (e.g. a `feat({ticket}): …` or `fix({ticket}): …` prefix). Only once a PR for this work has been created and pushed (with my confirmation) do you then automatically check its CI pipeline: poll the PR's checks (e.g. `gh pr checks`) until the test/CI checks finish, then report that CI is green, or summarize any failures. Checking CI is read-only and needs no confirmation. Don't consider the task complete until CI is green. " +
 	readOnlyGuardrail + closingInstructions
 
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
@@ -320,12 +342,36 @@ func prepareAgent(agent AgentKind, cwd string) {
 // assign (--session-id → adopt now); codex mints its own (learn it after spawn).
 // Used by the open / newdir / scratch flows; review and ticket build their own
 // claude-specific args.
-func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model string, unattended bool) {
+// goalDirective turns a session "goal" into Claude's /goal slash command — a
+// completion condition Claude keeps working toward across turns until a fast
+// model judges it met (claude only, v2.1.139+). Empty for other agents / no goal.
+// goalCondition is the sanitized /goal completion condition (claude only): one
+// line, since a stray newline would submit the slash command early. "" when
+// there's no goal or the agent isn't claude.
+func goalCondition(agent AgentKind, goal string) string {
+	goal = strings.TrimSpace(goal)
+	if goal == "" || normalizeAgent(agent) != AgentClaude {
+		return ""
+	}
+	return strings.Join(strings.Fields(goal), " ")
+}
+
+// goalDirective wraps the condition as the /goal slash command to submit.
+func goalDirective(agent AgentKind, goal string) string {
+	if c := goalCondition(agent, goal); c != "" {
+		return "/goal " + c
+	}
+	return ""
+}
+
+func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model string, unattended bool, goal string) {
 	agent = normalizeAgent(agent)
 	a := agentFor(agent)
 	prepareAgent(agent, cwd)
 	sid := newUUID() // used only when the agent accepts an assigned id (claude)
-	args := a.FreshArgs(sid, model, "")
+	// No competing prompt here, so the goal IS the first message: `/goal <cond>`
+	// sets the condition and starts the loop immediately.
+	args := a.FreshArgs(sid, model, goalDirective(agent, goal))
 	if unattended {
 		args = append(args, unattendedArgs(agent)...)
 	}
@@ -350,7 +396,7 @@ func (s *Server) startSession(w http.ResponseWriter, agent AgentKind, cwd, name,
 // startPrompted spawns the chosen agent with an initial prompt (used by Review
 // and New-PR/ticket). unattended runs reviews without approval prompts;
 // excludeEnv drops vars (reviews drop DATABASE_URL). Handles both id models.
-func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model, prompt, recap string, unattended bool, excludeEnv []string) {
+func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name, branch, model, prompt, recap string, unattended bool, excludeEnv []string, goal string) {
 	agent = normalizeAgent(agent)
 	a := agentFor(agent)
 	prepareAgent(agent, cwd)
@@ -363,6 +409,13 @@ func (s *Server) startPrompted(w http.ResponseWriter, agent AgentKind, cwd, name
 	}
 	sess.setModel(model)
 	sess.setRecap(recap)
+	// Keep the template prompt as turn 1. The goal becomes a *pending* condition the
+	// user activates with a button once the plan looks right — we can't auto-detect
+	// when the plan phase ends (a clarifying question fires the same Stop hook as a
+	// finished plan), so injecting it automatically would fire mid-conversation.
+	if c := goalCondition(agent, goal); c != "" {
+		sess.setPendingGoal(c)
+	}
 	if a.AssignsID() {
 		s.mgr.adopt(sess, sid)
 	} else {
@@ -387,11 +440,11 @@ func (s *Server) startPicked(w http.ResponseWriter, req createReq, model, cwd, n
 			name = fillTemplate(btn.SessionName, vals)
 		}
 		if btn.Prompt != "" {
-			s.startPrompted(w, req.Agent, cwd, name, branch, model, fillTemplate(btn.Prompt, vals), name+"…", unattended, btn.ExcludeEnv)
+			s.startPrompted(w, req.Agent, cwd, name, branch, model, fillTemplate(btn.Prompt, vals), name+"…", unattended, btn.ExcludeEnv, req.Goal)
 			return
 		}
 	}
-	s.startSession(w, req.Agent, cwd, name, branch, model, unattended)
+	s.startSession(w, req.Agent, cwd, name, branch, model, unattended, req.Goal)
 }
 
 // handleConfigLaunch spawns a session from a configurable button (/api/buttons):
@@ -444,10 +497,10 @@ func (s *Server) handleConfigLaunch(w http.ResponseWriter, req createReq, model 
 	// Opt-in checkbox OR the button's own setting (reviews stay unattended).
 	unattended := req.Unattended || btn.Unattended
 	if prompt != "" {
-		s.startPrompted(w, req.Agent, cwd, name, "", model, prompt, name+"…", unattended, btn.ExcludeEnv)
+		s.startPrompted(w, req.Agent, cwd, name, "", model, prompt, name+"…", unattended, btn.ExcludeEnv, req.Goal)
 		return
 	}
-	s.startSession(w, req.Agent, cwd, name, "", model, unattended)
+	s.startSession(w, req.Agent, cwd, name, "", model, unattended, req.Goal)
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

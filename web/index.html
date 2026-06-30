@@ -26,8 +26,10 @@
 
   <div class="split">
     <aside class="sidebar">
+      <div class="quota-panel" id="quota-panel"><!-- per-agent account quota, rendered from sessions' limits --></div>
       <div class="side-head">
         <span class="ttl">Sessions</span>
+        <span class="bulk" id="bulk-bar" hidden></span>
       </div>
       <div id="session-list"></div>
     </aside>
@@ -39,6 +41,7 @@
         <span class="t-name" id="t-name">AgorAI</span>
         <span class="t-cwd" id="t-cwd"></span>
         <span class="t-right" id="t-right"></span>
+        <button class="goal-start" id="goal-start-btn" hidden onclick="startPendingGoal()">🎯 Start goal</button>
         <button class="icon-btn" id="debug-btn" onclick="openDebug()" title="Show permission-prompt debug (what the parser saw)">🐞</button>
       </div>
       <div id="findbar">
@@ -70,6 +73,10 @@
       <div class="agent-row"><span>Agent</span><div class="agent-opts" id="agent-opts"></div></div>
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
       <label class="perm-row"><input type="checkbox" id="unattended-chk"> Run without permission prompts <small>· auto-approves everything (YOLO)</small></label>
+      <div class="goal-row" id="goal-row" hidden>
+        <span>Goal <small>· Claude keeps working until this condition holds — checked after each turn (<code>/goal</code>). Best with “Run without permission prompts.”</small></span>
+        <textarea id="goal-input" rows="2" placeholder="e.g. external review finds only minor issues — all critical/high/medium are fixed"></textarea>
+      </div>
       <div class="browse-form">
         <div class="browse-bar">
           <button type="button" class="browse-up" onclick="browseUp()" title="Parent folder">↑</button>
