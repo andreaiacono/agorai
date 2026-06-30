@@ -139,11 +139,13 @@ body {
 }
 .bulk { display: inline-flex; align-items: center; gap: 6px; }
 .bulk-n { color: var(--dim); font-size: 10px; }
-.bulk-del, .bulk-clear {
+.bulk-mark, .bulk-del, .bulk-clear {
   font: inherit; font-size: 10px; cursor: pointer;
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px;
 }
+.bulk-mark { color: var(--green); border-color: rgba(63, 185, 80, .4); }
+.bulk-mark:hover { background: var(--green); color: #06210d; border-color: var(--green); }
 .bulk-del { color: var(--red); border-color: rgba(240, 80, 110, .4); }
 .bulk-del:hover { background: var(--red); color: #1a0b0e; border-color: var(--red); }
 .bulk-clear { padding: 2px 6px; }

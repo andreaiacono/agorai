@@ -585,8 +585,18 @@ function renderBulk() {
   if (!n) { bar.hidden = true; bar.innerHTML = ""; return; }
   bar.hidden = false;
   bar.innerHTML = `<span class="bulk-n">${n} selected</span>` +
+    `<button class="bulk-mark" onclick="markCheckedUnread()" title="Mark selected as finished/unread (blinking green)">Mark unread</button>` +
     `<button class="bulk-del" onclick="deleteChecked()" title="Close the selected sessions">Delete</button>` +
     `<button class="bulk-clear" onclick="clearChecked()" title="Clear selection">✕</button>`;
+}
+
+// Flag the selected sessions as finished-but-unviewed (the green blinking state),
+// the same client-side "unread" mark the control WS sets on a working→idle turn.
+function markCheckedUnread() {
+  for (const id of state.checked) state.unread.add(id);
+  state.checked.clear();
+  lastCheckedId = null;
+  renderSessions();
 }
 
 async function deleteChecked() {
@@ -637,7 +647,7 @@ async function openModal(initialMode = "open", btn = null) {
   document.querySelector(".model-row").style.display = "";
   populateAgentOptions(btn ? btn.agents : null);
   document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
-  document.getElementById("goal-input").value = "";          // goals don't carry over between dialogs
+  document.getElementById("goal-input").value = (btn && btn.goal) || ""; // predefined goal from the button config
   resumables = []; // refetched when the Resume tab is opened
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []); // for worktree mode
   await setMode(initialMode); // selects the tab + renders the matching list
@@ -712,7 +722,7 @@ async function openConfig(b) {
   document.getElementById("modal-title").textContent = b.label;
   populateAgentOptions(b.agents);
   document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
-  document.getElementById("goal-input").value = "";          // goals don't carry over between dialogs
+  document.getElementById("goal-input").value = b.goal || ""; // predefined goal from the button config
   document.querySelector(".model-row").style.display = b.showModel === false ? "none" : "";
   await populateModels();
   updateGoalVisibility(); // only the New PR config button gets a goal
@@ -1108,6 +1118,8 @@ function renderButtonsMgr() {
       <div class="mb-inputs"><div class="mb-sub">Inputs</div>${inputs}<button class="add-env" type="button" onclick="addMBInput(${i})">+ input</button></div>
       <label class="mb-field">Prompt <small>placeholders: {input} {workspace} {dir}</small>
         <textarea class="mb-prompt" oninput="updateMB(${i},'prompt',this.value)" rows="3" placeholder="(optional) initial prompt">${esc(b.prompt || "")}</textarea></label>
+      <label class="mb-field">Goal <small>claude only · pre-fills the dialog's /goal condition</small>
+        <textarea class="mb-prompt" oninput="updateMB(${i},'goal',this.value)" rows="2" placeholder="(optional) completion condition">${esc(b.goal || "")}</textarea></label>
       <label class="mb-field">Session name <input value="${esc(b.sessionName || "")}" oninput="updateMB(${i},'sessionName',this.value)" placeholder="e.g. Ticket {ticket}"></label>
       ${variantNote}
     </div>`;

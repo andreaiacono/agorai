@@ -307,6 +307,11 @@ const ticketPlanPromptTemplate = "I want to start working on Linear ticket {tick
 	"Committing, pushing, and creating the PR each require my explicit confirmation first (as the guardrail below states) — never do them on your own. When you do create the PR, its title MUST include the ticket number {ticket} (e.g. a `feat({ticket}): …` or `fix({ticket}): …` prefix). Only once a PR for this work has been created and pushed (with my confirmation) do you then automatically check its CI pipeline: poll the PR's checks (e.g. `gh pr checks`) until the test/CI checks finish, then report that CI is green, or summarize any failures. Checking CI is read-only and needs no confirmation. Don't consider the task complete until CI is green. " +
 	readOnlyGuardrail + closingInstructions
 
+// newPRGoalDefault pre-fills the New PR dialog's Goal field: a /goal completion
+// condition that keeps Claude iterating review→fix until the code is clean. A
+// turn bound keeps the loop from running forever. Editable per launch.
+const newPRGoalDefault = "External reviewers have reviewed the latest code and only minor, low-severity issues remain — every critical, high, and medium severity finding they raised has been fixed and re-verified (or explicitly justified as not applicable), and CI is green; or stop after 20 turns."
+
 // scratchWorkspace is a dedicated dir for free sessions not tied to any repo.
 func scratchWorkspace() string { return appWorkspace("scratch") }
 

@@ -24,6 +24,7 @@ type Button struct {
 	Inputs      []ButtonInput    `json:"inputs,omitempty"`
 	Variants    []ButtonVariant  `json:"variants,omitempty"`
 	Prompt      string           `json:"prompt,omitempty"`
+	Goal        string           `json:"goal,omitempty"` // claude only: pre-fills the dialog's Goal (/goal condition)
 	SessionName string           `json:"sessionName,omitempty"`
 	Unattended  bool             `json:"unattended,omitempty"`
 	ExcludeEnv  []string         `json:"excludeEnv,omitempty"`
@@ -68,6 +69,7 @@ func defaultButtons() []Button {
 			Workspace:   &ButtonWorkspace{Dir: "~/dev/PRs", Trust: true},
 			Inputs:      []ButtonInput{{ID: "ticket", Label: "Linear ticket", Placeholder: "e.g. BLUE-900", Required: true, Transform: "blue-prefix"}},
 			Prompt:      ticketPlanPromptTemplate,
+			Goal:        newPRGoalDefault,
 			SessionName: "Ticket {ticket}",
 		},
 		{
