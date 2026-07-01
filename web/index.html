@@ -66,7 +66,7 @@
   </div>
 
   <!-- New session modal -->
-  <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+  <div class="overlay" id="overlay">
     <div class="modal" id="modal">
       <h2 id="modal-title">New <span>session</span></h2>
       <input class="search" id="search" placeholder="Filter…" oninput="renderList()" autocomplete="off">
@@ -96,7 +96,7 @@
   </div>
 
   <!-- Prompt debug modal -->
-  <div class="overlay" id="debug-overlay" onclick="if(event.target===this)closeDebug()">
+  <div class="overlay" id="debug-overlay">
     <div class="modal debug-modal">
       <h2>Prompt <span>debug</span></h2>
       <div class="debug-body" id="debug-body"></div>
@@ -108,7 +108,7 @@
   </div>
 
   <!-- Buttons manager modal -->
-  <div class="overlay" id="buttons-overlay" onclick="if(event.target===this)closeButtonsManager()">
+  <div class="overlay" id="buttons-overlay">
     <div class="modal buttons-modal">
       <h2>Launch <span>buttons</span></h2>
       <div class="buttons-mgr" id="buttons-mgr"></div>
@@ -123,7 +123,7 @@
   </div>
 
   <!-- Settings modal -->
-  <div class="overlay" id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+  <div class="overlay" id="settings-overlay">
     <div class="modal">
       <h2><span>Settings</span></h2>
       <div class="settings-body">

@@ -661,6 +661,24 @@ async function openModal(initialMode = "open", btn = null) {
 }
 function closeModal() { overlay.classList.remove("open"); }
 
+// Close an overlay only on a genuine backdrop click — one whose press *started*
+// on the backdrop too. A plain `click` fires on the common ancestor of its
+// mousedown/mouseup, so selecting text inside the dialog and releasing on the
+// backdrop would otherwise land on the overlay and dismiss it.
+function wireBackdropClose(id, close) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let downOnBackdrop = false;
+  el.addEventListener("mousedown", (e) => { downOnBackdrop = e.target === el; });
+  el.addEventListener("click", (e) => { if (e.target === el && downOnBackdrop) close(); });
+}
+[
+  ["overlay", closeModal],
+  ["debug-overlay", closeDebug],
+  ["buttons-overlay", closeButtonsManager],
+  ["settings-overlay", closeSettings],
+].forEach(([id, close]) => wireBackdropClose(id, close));
+
 const MODAL_TITLES = {
   open: "New <span>session</span>",
   worktree: "New session in <span>new branch</span>",

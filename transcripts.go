@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// resumableScanLimit caps how many past sessions the Resume picker lists
+// (newest first). There's no date cutoff — this count is the only bound, so it
+// governs how far back the dialog's filter box can reach. Each listed session is
+// fully parsed for its title/recap, so this trades dialog-open cost for reach.
+const resumableScanLimit = 200
+
 // Resumable is a past Claude Code session found on disk that can be re-opened
 // (hosted) via `claude --resume <id>`.
 type Resumable struct {

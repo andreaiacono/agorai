@@ -111,11 +111,11 @@ func (s *Server) handleResumable(w http.ResponseWriter, r *http.Request) {
 	var list []Resumable
 	switch normalizeAgent(AgentKind(r.URL.Query().Get("agent"))) {
 	case AgentCodex:
-		list = scanCodexResumable(50)
+		list = scanCodexResumable(resumableScanLimit)
 	case AgentGemini:
 		list = nil // gemini resume-discovery not implemented yet
 	default:
-		list = scanResumable(50)
+		list = scanResumable(resumableScanLimit)
 	}
 	writeJSON(w, s.mgr.applyPersistedNames(list))
 }

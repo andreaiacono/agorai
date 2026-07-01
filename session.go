@@ -40,7 +40,7 @@ type Session struct {
 	recap       string
 	ctxTokens   int // live context-window size (tokens) from the transcript; 0 if unknown
 	ctxMax      int // model's context-window ceiling; 0 if unknown
-	// account usage-limit windows (codex only): used percent + unix reset per window
+	// account usage-limit windows: used percent + unix reset per window
 	limit5hPct, limitWkPct     int
 	limit5hReset, limitWkReset int64
 	promptQ     string         // parsed question for a permission prompt
@@ -70,7 +70,8 @@ type SessionDTO struct {
 	// model's ceiling. 0/omitted when unknown, so the UI hides the gauge.
 	CtxTokens int `json:"ctxTokens,omitempty"`
 	CtxMax    int `json:"ctxMax,omitempty"`
-	// Account usage limits (codex only; absent for claude — not readable from disk).
+	// Account usage limits: codex from /status, claude from its statusLine and
+	// the OAuth usage poller. Absent until known.
 	Limits *UsageLimits `json:"limits,omitempty"`
 	// A /goal condition queued at launch (New PR), awaiting the user's "Start goal".
 	PendingGoal string `json:"pendingGoal,omitempty"`
@@ -344,6 +345,45 @@ type Manager struct {
 	// terminal view stays transparent.
 	statuslineSettings string
 	userStatusline     string
+
+	// lastClaude is the most recent account usage snapshot from the OAuth usage
+	// poller, used to seed a freshly-spawned Claude session so its quota row
+	// isn't greyed until the next poll tick. nil until the first successful poll.
+	lastClaude *UsageLimits
+}
+
+// agentCount returns how many live sessions are backed by the given agent.
+func (m *Manager) agentCount(k AgentKind) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, s := range m.sessions {
+		if s.agent == k {
+			n++
+		}
+	}
+	return n
+}
+
+// setClaudeLimits records the account's Claude usage windows (from the OAuth
+// usage endpoint) and applies them to every live Claude session, so the quota
+// panel fills at startup instead of waiting for each session's first API
+// response. Returns the number of Claude sessions updated.
+func (m *Manager) setClaudeLimits(pct5h int, reset5h int64, pctWk int, resetWk int64) int {
+	m.mu.Lock()
+	m.lastClaude = &UsageLimits{Pct5h: pct5h, Reset5h: reset5h, PctWeek: pctWk, ResetWeek: resetWk}
+	var claude []*Session
+	for _, s := range m.sessions {
+		if s.agent == AgentClaude {
+			claude = append(claude, s)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, s := range claude {
+		s.setLimits(pct5h, reset5h, pctWk, resetWk)
+	}
+	return len(claude)
 }
 
 func NewManager(store *Store, cfg *ConfigStore) *Manager {
@@ -458,6 +498,13 @@ func (m *Manager) spawn(agent AgentKind, id, cwd, name, branch string, excludeEn
 	}
 
 	m.mu.Lock()
+	// Seed a new Claude session's quota from the last poll so its row shows
+	// immediately rather than greyed until the next tick (safe: s isn't published
+	// yet). setLimits' own value takes over once the statusLine reports.
+	if agent == AgentClaude && m.lastClaude != nil {
+		s.limit5hPct, s.limit5hReset = m.lastClaude.Pct5h, m.lastClaude.Reset5h
+		s.limitWkPct, s.limitWkReset = m.lastClaude.PctWeek, m.lastClaude.ResetWeek
+	}
 	m.sessions[id] = s
 	m.order = append(m.order, id)
 	m.mu.Unlock()

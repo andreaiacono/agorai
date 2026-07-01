@@ -60,6 +60,12 @@ func main() {
 	}
 	srv.startCodexTailers() // codex sessions report state via rollout polling, not hooks
 
+	// Fill the Claude quota panel at startup by polling the account usage endpoint,
+	// instead of waiting for each session's first API response to feed its statusLine.
+	if home, err := os.UserHomeDir(); err == nil {
+		go srv.pollClaudeUsage(home)
+	}
+
 	if !hooksInstalled() {
 		log.Printf("WARNING: agorai hook not found in ~/.claude/settings.json — needs-input blink and live recap updates won't work. See README 'Wire up the hooks'. (Persistence works without it.)")
 	}
