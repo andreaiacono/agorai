@@ -1016,7 +1016,14 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 		//  - a lone Esc into a working session = interrupting the turn → idle
 		//    (claude fires no Stop hook on interrupt, so we'd stay stuck "working")
 		switch st := sess.currentState(); {
-		case (st == StatePerm || st == StateWaiting) && looksTyped(data):
+		// A permission menu is answered by ANY keystroke — a number, an arrow, or a
+		// bare Enter accepting the highlighted option — so clear it on the first real
+		// input. (looksTyped would ignore a bare-Enter accept and leave it lingering.)
+		case st == StatePerm && looksAnswered(data):
+			sess.setState(StateWorking, "Working…")
+			s.broadcastSessions()
+		// A free-text prompt needs actual content — a bare Enter submits nothing.
+		case st == StateWaiting && looksTyped(data):
 			sess.setState(StateWorking, "Working…")
 			s.broadcastSessions()
 		case st == StateWorking && isEscInterrupt(data):
@@ -1053,6 +1060,14 @@ func looksTyped(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// looksAnswered reports whether a PTY input frame is a genuine user keystroke —
+// anything left once terminal report replies are stripped, INCLUDING a bare
+// Enter. Used for permission menus, where Enter accepts the highlighted option
+// (so unlike a free-text prompt, a lone Enter does answer it).
+func looksAnswered(data []byte) bool {
+	return len(termReportRe.ReplaceAll(data, nil)) > 0
 }
 
 // ---- control WebSocket (shared: state out, commands in) ----

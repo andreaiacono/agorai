@@ -23,3 +23,23 @@ func TestLooksTyped(t *testing.T) {
 		}
 	}
 }
+
+func TestLooksAnswered(t *testing.T) {
+	// Like looksTyped, but a bare Enter counts — it accepts a permission menu's
+	// highlighted option, so it must clear the prompt promptly.
+	cases := map[string]bool{
+		"\r":            true,  // Enter accepts the highlighted option
+		"\n":            true,  // newline, likewise
+		"1\r":           true,  // pick an option
+		"\x1b[A":        true,  // arrow navigation
+		"\x1b[12;34R":   false, // cursor-position report (terminal reply, not a keystroke)
+		"\x1b[?62;1;6c": false, // device attributes
+		"\x1b[I":        false, // focus-in report (clicking the terminal doesn't answer)
+		"\x1b[6n":       false, // status query reply
+	}
+	for in, want := range cases {
+		if got := looksAnswered([]byte(in)); got != want {
+			t.Errorf("looksAnswered(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

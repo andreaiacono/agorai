@@ -168,10 +168,15 @@ const QUOTA_WINDOWS = [
 ];
 function renderQuota() {
   const byAgent = agentLimits();
+  // Only show agents you actually have open — no Codex rows in a Claude-only
+  // session, and vice-versa; hide the whole panel when nothing is open.
+  const open = new Set(state.sessions.map((s) => s.agent));
+  const agents = QUOTA_AGENTS.filter((a) => open.has(a.key));
+  document.getElementById("quota-panel").hidden = agents.length === 0;
   let html = "";
   for (const win of QUOTA_WINDOWS) {
     html += `<div class="quota-box"><div class="quota-head">${win.label} <small>· ${win.sub}</small></div>`;
-    for (const { key, label, color } of QUOTA_AGENTS) {
+    for (const { key, label, color } of agents) {
       const l = byAgent[key];
       const reset = l ? l[win.reset] : 0;
       const icon = agentIcon(key);
