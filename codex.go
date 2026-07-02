@@ -132,8 +132,9 @@ func codexTranscriptPath(id string) string {
 
 // codexSessionMeta is the first line of a rollout file.
 type codexRolloutLine struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
+	Timestamp string          `json:"timestamp"` // ISO-8601, e.g. 2026-07-02T08:35:08.762Z
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 type codexMetaPayload struct {
@@ -365,6 +366,7 @@ type codexTailer struct {
 	// account usage limits from token_count.rate_limits (the data behind `/status`):
 	limit5hPct, limitWkPct     int   // used percent of the 5h (primary) and weekly (secondary) windows
 	limit5hReset, limitWkReset int64 // unix resets_at for each window (0 = no data)
+	limitsAt     int64             // unix seconds of the turn the limits above came from (its rollout timestamp)
 	pending      map[string]string // escalated calls awaiting approval: call_id → justification
 	pendingOrder []string
 }
@@ -400,7 +402,7 @@ func (t *codexTailer) reset() {
 	t.offset, t.buf = 0, nil
 	t.turnActive, t.lastAgent = false, ""
 	t.ctxTokens, t.ctxMax = 0, 0
-	t.limit5hPct, t.limitWkPct, t.limit5hReset, t.limitWkReset = 0, 0, 0, 0
+	t.limit5hPct, t.limitWkPct, t.limit5hReset, t.limitWkReset, t.limitsAt = 0, 0, 0, 0, 0
 	t.pending, t.pendingOrder = map[string]string{}, nil
 }
 
@@ -496,6 +498,9 @@ func (t *codexTailer) apply(ln []byte) {
 				}
 				if w := tc.RateLimits.Secondary; w != nil {
 					t.limitWkPct, t.limitWkReset = int(w.UsedPercent+0.5), w.ResetsAt
+				}
+				if tc.RateLimits.Primary != nil || tc.RateLimits.Secondary != nil {
+					t.limitsAt = parseResetsAt(l.Timestamp) // the turn this snapshot is from
 				}
 			}
 		}

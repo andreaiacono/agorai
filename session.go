@@ -43,6 +43,7 @@ type Session struct {
 	// account usage-limit windows: used percent + unix reset per window
 	limit5hPct, limitWkPct     int
 	limit5hReset, limitWkReset int64
+	limitsAt                   int64 // unix seconds the limits above were sampled (codex: turn time; claude: fetch time) — used to pick the freshest session per agent
 	promptQ     string         // parsed question for a permission prompt
 	promptCtx   string         // parsed context lines above the question (for the tooltip)
 	promptOpts  []PromptOption // parsed options for a permission prompt
@@ -83,6 +84,7 @@ type UsageLimits struct {
 	Reset5h   int64 `json:"reset5h"`
 	PctWeek   int   `json:"pctWeek"`
 	ResetWeek int64 `json:"resetWeek"`
+	At        int64 `json:"at,omitempty"` // unix seconds the sample was taken; the panel shows the freshest session per agent
 }
 
 func (s *Session) dto() SessionDTO {
@@ -101,7 +103,7 @@ func (s *Session) dto() SessionDTO {
 	}
 	var limits *UsageLimits
 	if s.limit5hReset > 0 || s.limitWkReset > 0 {
-		limits = &UsageLimits{Pct5h: s.limit5hPct, Reset5h: s.limit5hReset, PctWeek: s.limitWkPct, ResetWeek: s.limitWkReset}
+		limits = &UsageLimits{Pct5h: s.limit5hPct, Reset5h: s.limit5hReset, PctWeek: s.limitWkPct, ResetWeek: s.limitWkReset, At: s.limitsAt}
 	}
 	return SessionDTO{
 		ID: s.ID, Name: s.name, Cwd: s.cwd, Branch: s.branch,
@@ -141,9 +143,15 @@ func (s *Session) setContext(tokens, max int) {
 	s.mu.Unlock()
 }
 
-func (s *Session) setLimits(pct5h int, reset5h int64, pctWk int, resetWk int64) {
+// setLimits records the account usage windows and when they were sampled (at,
+// unix seconds; 0 = now, for live sources like the Claude poller).
+func (s *Session) setLimits(pct5h int, reset5h int64, pctWk int, resetWk int64, at int64) {
+	if at == 0 {
+		at = time.Now().Unix()
+	}
 	s.mu.Lock()
 	s.limit5hPct, s.limit5hReset, s.limitWkPct, s.limitWkReset = pct5h, reset5h, pctWk, resetWk
+	s.limitsAt = at
 	s.mu.Unlock()
 }
 
@@ -370,8 +378,9 @@ func (m *Manager) agentCount(k AgentKind) int {
 // panel fills at startup instead of waiting for each session's first API
 // response. Returns the number of Claude sessions updated.
 func (m *Manager) setClaudeLimits(pct5h int, reset5h int64, pctWk int, resetWk int64) int {
+	at := time.Now().Unix()
 	m.mu.Lock()
-	m.lastClaude = &UsageLimits{Pct5h: pct5h, Reset5h: reset5h, PctWeek: pctWk, ResetWeek: resetWk}
+	m.lastClaude = &UsageLimits{Pct5h: pct5h, Reset5h: reset5h, PctWeek: pctWk, ResetWeek: resetWk, At: at}
 	var claude []*Session
 	for _, s := range m.sessions {
 		if s.agent == AgentClaude {
@@ -381,7 +390,7 @@ func (m *Manager) setClaudeLimits(pct5h int, reset5h int64, pctWk int, resetWk i
 	m.mu.Unlock()
 
 	for _, s := range claude {
-		s.setLimits(pct5h, reset5h, pctWk, resetWk)
+		s.setLimits(pct5h, reset5h, pctWk, resetWk, at)
 	}
 	return len(claude)
 }
@@ -504,6 +513,7 @@ func (m *Manager) spawn(agent AgentKind, id, cwd, name, branch string, excludeEn
 	if agent == AgentClaude && m.lastClaude != nil {
 		s.limit5hPct, s.limit5hReset = m.lastClaude.Pct5h, m.lastClaude.Reset5h
 		s.limitWkPct, s.limitWkReset = m.lastClaude.PctWeek, m.lastClaude.ResetWeek
+		s.limitsAt = m.lastClaude.At
 	}
 	m.sessions[id] = s
 	m.order = append(m.order, id)

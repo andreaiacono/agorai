@@ -120,6 +120,6 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return // no usable limits yet (before the first API response, or an API-key user)
 	}
 
-	sess.setLimits(pct5h, reset5h, pctWk, resetWk)
+	sess.setLimits(pct5h, reset5h, pctWk, resetWk, 0) // 0 = now: the statusLine reports live
 	s.broadcastSessions() // push the freshly-known limits to clients live
 }

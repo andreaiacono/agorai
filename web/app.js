@@ -153,10 +153,16 @@ const QUOTA_AGENTS = [
   { key: "claude", label: "Claude", color: "#d97757" }, // anthropic coral
   { key: "codex", label: "Codex", color: "#2dd4bf" },   // teal (clear of state green)
 ];
+// Per agent, use the freshest snapshot across its sessions. Codex usage is a
+// per-turn snapshot from each session's rollout, so an idle session's numbers
+// lag; picking the largest `at` (sample time) tracks the most recently active
+// session instead of whichever happens to be first in the list.
 function agentLimits() {
   const out = {};
   for (const s of state.sessions) {
-    if (s.limits && !out[s.agent]) out[s.agent] = s.limits;
+    if (!s.limits) continue;
+    const cur = out[s.agent];
+    if (!cur || (s.limits.at || 0) > (cur.at || 0)) out[s.agent] = s.limits;
   }
   return out;
 }
@@ -189,7 +195,7 @@ function renderQuota() {
       const tip = `${label} ${win.label.toLowerCase()} (${win.sub}) · ${pct}% used · resets in ${fmtRemaining(reset)}`;
       html += `<div class="qrow" title="${esc(tip)}">${icon}<span class="qname">${label}</span>` +
         `<div class="qbar"><span style="width:${pct}%;background:${color};color:${color}"></span></div>` +
-        `<span class="qmeta"><b style="color:${color}">${pct}%</b> · <span class="qreset" data-reset="${reset}">Resets in ${fmtRemaining(reset)}</span></span></div>`;
+        `<span class="qmeta"><b style="color:${color}">${pct}%</b> · <span class="qreset" data-reset="${reset}">Resets in <span class="qremain">${fmtRemaining(reset)}</span></span></span></div>`;
     }
     html += `</div>`;
   }
@@ -214,7 +220,7 @@ function fmtRemaining(epoch) {
 function tickQuotaResets() {
   document.querySelectorAll("#quota-panel .qreset").forEach((el) => {
     const r = +el.dataset.reset;
-    if (r) el.textContent = "Resets in " + fmtRemaining(r);
+    if (r) el.innerHTML = 'Resets in <span class="qremain">' + fmtRemaining(r) + "</span>";
   });
 }
 setInterval(tickQuotaResets, 60000);

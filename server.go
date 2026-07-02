@@ -848,7 +848,7 @@ func (s *Server) superviseCodex(sess *Session, cwd string, after time.Time) {
 					sess.setContext(tailer.ctxTokens, tailer.ctxMax) // exact ceiling from codex
 				}
 				if tailer.limit5hReset > 0 || tailer.limitWkReset > 0 {
-					sess.setLimits(tailer.limit5hPct, tailer.limit5hReset, tailer.limitWkPct, tailer.limitWkReset)
+					sess.setLimits(tailer.limit5hPct, tailer.limit5hReset, tailer.limitWkPct, tailer.limitWkReset, tailer.limitsAt)
 				}
 
 				// On an approval, parse the on-screen prompt so the panel can show
@@ -1048,26 +1048,40 @@ func isEscInterrupt(data []byte) bool {
 // must NOT be mistaken for the user typing.
 var termReportRe = regexp.MustCompile("\x1b\\[[0-9;?>=]*[RcnIO]")
 
+// isContentByte reports whether b is a genuine content character (printable, or
+// the start of a multi-byte UTF-8 rune) rather than a control key. Enter, Esc,
+// Backspace/DEL and Ctrl-chords (e.g. Ctrl-D = 0x04, which sends EOF, not text)
+// are all excluded — pressing them must not be read as the user typing a reply.
+func isContentByte(b byte) bool {
+	return b >= 0x20 && b != 0x7f
+}
+
 // looksTyped reports whether a PTY input frame contains a genuine *content*
-// keystroke — something left once terminal report sequences are stripped, and
-// not just a bare Enter/newline. A lone Enter submits nothing on an empty prompt,
-// so it must not flip a waiting session to "working"; real input already flips on
-// its first content character (the Enter only ends it).
+// keystroke — a printable character left once terminal report sequences are
+// stripped, and not just a bare Enter or a control key. A lone Enter submits
+// nothing on an empty prompt, and a stray Ctrl-D/Ctrl-C isn't a reply, so
+// neither must flip a waiting session to "working"; real input already flips on
+// its first content character (the Enter only ends it). An arrow/nav key still
+// counts — its escape sequence carries printable bytes (e.g. '[' and 'A').
 func looksTyped(data []byte) bool {
 	for _, b := range termReportRe.ReplaceAll(data, nil) {
-		if b != '\r' && b != '\n' {
+		if isContentByte(b) {
 			return true
 		}
 	}
 	return false
 }
 
-// looksAnswered reports whether a PTY input frame is a genuine user keystroke —
-// anything left once terminal report replies are stripped, INCLUDING a bare
-// Enter. Used for permission menus, where Enter accepts the highlighted option
-// (so unlike a free-text prompt, a lone Enter does answer it).
+// looksAnswered is looksTyped plus a bare Enter — used for permission menus,
+// where Enter accepts the highlighted option (so unlike a free-text prompt, a
+// lone Enter does answer it). Control keys like Ctrl-D are still excluded.
 func looksAnswered(data []byte) bool {
-	return len(termReportRe.ReplaceAll(data, nil)) > 0
+	for _, b := range termReportRe.ReplaceAll(data, nil) {
+		if isContentByte(b) || b == '\r' || b == '\n' {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- control WebSocket (shared: state out, commands in) ----

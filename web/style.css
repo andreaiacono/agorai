@@ -129,6 +129,7 @@ body {
 }
 .qmeta { flex: none; width: 138px; text-align: right; white-space: nowrap; font-size: 10px; color: var(--dim); font-feature-settings: "tnum"; }
 .qmeta b { font-weight: 700; }
+.qremain { color: #8a95a3; } /* the countdown value, a shade lighter than the "Resets in" label */
 .qrow-empty .qname, .qrow-empty .qmeta { color: var(--dim); font-weight: 400; }
 .qrow-empty .agent-ic { opacity: .4; }
 

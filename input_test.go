@@ -16,6 +16,9 @@ func TestLooksTyped(t *testing.T) {
 		"\x1b[O":            false, // focus-out report
 		"\x1b[6n\x1b[?1;2c": false, // multiple replies, nothing typed
 		"\x1b[12;1Ry":       true,  // a report plus a real keystroke
+		"\x04":              false, // Ctrl-D (EOF), not content
+		"\x03":              false, // Ctrl-C (interrupt), not content
+		"\x7f":              false, // Backspace/DEL, not content
 	}
 	for in, want := range cases {
 		if got := looksTyped([]byte(in)); got != want {
@@ -36,6 +39,7 @@ func TestLooksAnswered(t *testing.T) {
 		"\x1b[?62;1;6c": false, // device attributes
 		"\x1b[I":        false, // focus-in report (clicking the terminal doesn't answer)
 		"\x1b[6n":       false, // status query reply
+		"\x04":          false, // Ctrl-D (EOF) doesn't answer a menu
 	}
 	for in, want := range cases {
 		if got := looksAnswered([]byte(in)); got != want {
