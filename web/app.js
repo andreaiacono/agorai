@@ -379,6 +379,8 @@ function mountTerminal(id) {
   //  - Ctrl/Cmd+F      → our find bar (handled at window level), don't reach PTY
   //  - Ctrl/Cmd+C      → copy the selection (swapped: no longer sends ^C)
   //  - Ctrl/Cmd+Shift+C → send the interrupt signal (^C / 0x03) to claude
+  //  - Ctrl/Cmd+Z      → undo, not suspend: raw ^Z (0x1a) makes the tty send
+  //    SIGTSTP and background the session; send Claude's undo (^_ / 0x1f) instead
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
     const mod = e.ctrlKey || e.metaKey;
@@ -392,6 +394,10 @@ function mountTerminal(id) {
         if (sel) navigator.clipboard.writeText(sel).catch(() => {});
       }
       return false; // we handled it; xterm must not also send anything
+    }
+    if ((e.key === "z" || e.key === "Z") && !e.altKey) {
+      if (ws.readyState === 1) ws.send(enc.encode("\x1f")); // chat:undo (Ctrl+_)
+      return false;
     }
     return true;
   });
@@ -658,6 +664,7 @@ async function openModal(initialMode = "open", btn = null) {
   document.querySelector(".model-row").style.display = "";
   populateAgentOptions(btn ? btn.agents : null);
   document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
+  document.getElementById("goal-enabled").checked = false; // goal is opt-in each time
   document.getElementById("goal-input").value = (btn && btn.goal) || ""; // predefined goal from the button config
   resumables = []; // refetched when the Resume tab is opened
   repos = await fetch("/api/repos").then((r) => r.json()).catch(() => []); // for worktree mode
@@ -751,6 +758,7 @@ async function openConfig(b) {
   document.getElementById("modal-title").textContent = b.label;
   populateAgentOptions(b.agents);
   document.getElementById("unattended-chk").checked = false; // always start unchecked — opt in each time
+  document.getElementById("goal-enabled").checked = false; // goal is opt-in each time
   document.getElementById("goal-input").value = b.goal || ""; // predefined goal from the button config
   document.querySelector(".model-row").style.display = b.showModel === false ? "none" : "";
   await populateModels();
@@ -946,11 +954,15 @@ function goalApplies() {
   if (mode === "config") return !!(configBtn && configBtn.id === "new-pr");
   return mode === "open" || mode === "worktree";
 }
+function goalEnabled() {
+  return goalApplies() && document.getElementById("goal-enabled").checked;
+}
 function updateGoalVisibility() {
   document.getElementById("goal-row").hidden = !goalApplies();
+  document.getElementById("goal-input").hidden = !goalEnabled(); // the textbox appears only once the goal is enabled
 }
 function goalValue() {
-  return goalApplies() ? document.getElementById("goal-input").value.trim() : "";
+  return goalEnabled() ? document.getElementById("goal-input").value.trim() : "";
 }
 async function populateModels() {
   // Models are per-agent. Until an agent is picked there's nothing to list.

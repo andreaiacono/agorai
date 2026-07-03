@@ -74,8 +74,8 @@
       <div class="model-row"><span>Model</span><select id="model-sel" onchange="onModelChange()"></select><select id="model-ver"><option value="">latest</option></select></div>
       <label class="perm-row"><input type="checkbox" id="unattended-chk"> Run without permission prompts <small>· auto-approves everything (YOLO)</small></label>
       <div class="goal-row" id="goal-row" hidden>
-        <span>Goal <small>· Claude keeps working until this condition holds — checked after each turn (<code>/goal</code>). Best with “Run without permission prompts.”</small></span>
-        <textarea id="goal-input" rows="2" placeholder="e.g. external review finds only minor issues — all critical/high/medium are fixed"></textarea>
+        <label class="goal-toggle"><input type="checkbox" id="goal-enabled" onchange="updateGoalVisibility()"> Set a goal <small>· Claude keeps working until this condition holds — checked after each turn (<code>/goal</code>). Best with “Run without permission prompts.”</small></label>
+        <textarea id="goal-input" rows="2" hidden placeholder="e.g. external review finds only minor issues — all critical/high/medium are fixed"></textarea>
       </div>
       <div class="browse-form">
         <div class="browse-bar">
