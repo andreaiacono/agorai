@@ -405,6 +405,28 @@ function mountTerminal(id) {
   term.open(pane);
   fit.fit();
 
+  // Drive scrollback from the wheel ourselves. Chromium/Brave can leave xterm's
+  // viewport scroll dead (overlay-scrollbar quirk) or the running app may grab
+  // the wheel via mouse tracking — either way "scroll up to see earlier output"
+  // stops working. Capturing the wheel (so xterm's own handler doesn't also
+  // fire) makes it behave identically in every browser. Full-screen apps own the
+  // alternate buffer, so leave that alone; Ctrl+wheel stays as browser zoom.
+  pane.addEventListener("wheel", (e) => {
+    if (e.ctrlKey || term.buffer.active.type === "alternate") return;
+    let lines;
+    if (e.deltaMode === 1) lines = e.deltaY;               // lines
+    else if (e.deltaMode === 2) lines = e.deltaY * term.rows; // pages
+    else {
+      const cell = term._core?._renderService?.dimensions?.css?.cell?.height || 17;
+      lines = e.deltaY / cell;                             // pixels → lines
+    }
+    lines = lines < 0 ? Math.floor(lines) : Math.ceil(lines);
+    if (!lines) return;
+    term.scrollLines(lines);
+    e.preventDefault();
+    e.stopPropagation();
+  }, { passive: false, capture: true });
+
   const ws = new WebSocket(`ws://${location.host}/ws/pty/${id}`);
   ws.binaryType = "arraybuffer";
   ws.onmessage = (e) => term.write(new Uint8Array(e.data));
