@@ -8,7 +8,7 @@ const state = {
   sessions: [],            // latest snapshot from the control WS
   selected: null,          // selected session id
   terms: new Map(),        // id -> { term, fit, ws, pane }
-  config: { scrollback: 10000, env: {} },
+  config: { scrollback: 100000, env: {} },
   unread: new Set(),       // sessions that completed (working→idle) but aren't viewed yet
   prevStates: {},          // id -> last seen state, for transition detection
   order: [],               // user's drag-reorder of the rows (ids), persisted in localStorage
@@ -355,7 +355,7 @@ function mountTerminal(id) {
   host.appendChild(pane);
 
   const term = new Terminal({
-    scrollback: state.config.scrollback || 10000,  // configurable — see Settings
+    scrollback: state.config.scrollback || 100000,  // configurable — see Settings
     fontSize: 13,
     fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
     theme: {
@@ -1206,7 +1206,7 @@ const settingsOverlay = document.getElementById("settings-overlay");
 
 async function loadConfig() {
   const c = await fetch("/api/config").then((r) => r.json()).catch(() => null);
-  if (c) state.config = { scrollback: c.scrollback || 10000, env: c.env || {} };
+  if (c) state.config = { scrollback: c.scrollback || 100000, env: c.env || {} };
 }
 
 async function openSettings() {
@@ -1234,7 +1234,7 @@ function addEnvRow(k = "", v = "") {
 }
 
 async function saveSettings() {
-  const scrollback = parseInt(document.getElementById("set-scrollback").value, 10) || 10000;
+  const scrollback = parseInt(document.getElementById("set-scrollback").value, 10) || 100000;
   const env = {};
   for (const row of document.querySelectorAll(".env-row")) {
     const k = row.querySelector(".env-k").value.trim();

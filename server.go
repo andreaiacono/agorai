@@ -55,11 +55,21 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /ws/pty/{id}", s.handlePtyWS)
 
 	sub, _ := fs.Sub(webFS, "web")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	mux.Handle("/", noStore(http.FileServer(http.FS(sub))))
 
 	// Local single-user tool: same-origin only, so allow the upgrade.
 	s.up.CheckOrigin = func(*http.Request) bool { return true }
 	return mux
+}
+
+// noStore stops browsers (Brave especially) from serving stale embedded assets
+// after a rebuild — the embed FS has no modtime/ETag to revalidate against, so
+// without this a plain reload can keep the old app.js/style.css.
+func noStore(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // ---- REST ----
@@ -1005,6 +1015,9 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 					sess.resizeRepaint(msg.Resize[1], msg.Resize[0])
 				} else {
 					sess.resize(msg.Resize[1], msg.Resize[0])
+				}
+				if s.cfg != nil {
+					s.cfg.SetTermSize(int(msg.Resize[0]), int(msg.Resize[1])) // remember for the next session's spawn width
 				}
 			}
 			continue

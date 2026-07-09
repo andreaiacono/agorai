@@ -490,7 +490,13 @@ func (m *Manager) spawn(agent AgentKind, id, cwd, name, branch string, excludeEn
 	if err != nil {
 		return nil, err
 	}
-	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80})
+	// Start at the browser's last-known size so early output (and a resumed
+	// session's replayed history) wraps at the real width, not a narrow default.
+	cols, rows := uint16(120), uint16(30)
+	if m.cfg != nil {
+		cols, rows = m.cfg.termSize(cols, rows)
+	}
+	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 
 	s := &Session{
 		ID:      id,
@@ -744,14 +750,14 @@ func (m *Manager) Rename(id, name string) {
 // Output is byte-heavy (ANSI + redraws), so we keep ~512 bytes per line, bounded
 // to keep memory sane. This is what gets replayed into a (re)connecting terminal.
 func (m *Manager) ringBytes() int {
-	sb := 10000
+	sb := 100000
 	if m.cfg != nil {
 		if v := m.cfg.Get().Scrollback; v > 0 {
 			sb = v
 		}
 	}
 	n := sb * 512
-	const min, max = 512 << 10, 24 << 20 // 512KB … 24MB
+	const min, max = 512 << 10, 64 << 20 // 512KB … 64MB (fits ~100k lines of replay)
 	if n < min {
 		n = min
 	}

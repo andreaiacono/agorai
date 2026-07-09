@@ -280,9 +280,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 #term-host { flex: 1; position: relative; background: #0a0d12; min-height: 0; }
 .term-pane { position: absolute; inset: 0; padding: 6px; display: none; }
 .term-pane.active { display: block; }
-/* Force a real, draggable scrollbar on the terminal viewport — Chromium/Brave
-   overlay scrollbars can otherwise render it undraggable. */
-.xterm-viewport { overflow-y: scroll !important; }
+/* xterm draws its rows full-width, painting over the scrollbar column so it
+   can't be dragged/clicked (xtermjs/xterm.js#1751; worse in Chromium/Brave).
+   FitAddon already reserves the 9px scrollbar in its column math, so inset the
+   text layer by that width to expose the scrollbar with no layout mismatch.
+   (Wheel scrolling is driven from JS in mountTerminal.) */
+.xterm .xterm-screen { margin-right: 9px; }
 .xterm-viewport::-webkit-scrollbar { width: 9px; }
 .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 .empty { color: var(--dim); padding: 24px; }
