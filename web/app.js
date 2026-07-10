@@ -725,6 +725,21 @@ window.addEventListener("resize", () => {
   });
 })();
 
+/* ---------- light / dark theme ---------- */
+let theme = localStorage.getItem("agorai.theme") || "dark";
+
+function applyTheme() {
+  document.documentElement.setAttribute("data-theme", theme);
+  const b = document.getElementById("theme-btn");
+  if (b) b.textContent = theme === "dark" ? "◐" : "◑";
+}
+
+function toggleTheme() {
+  theme = theme === "dark" ? "light" : "dark";
+  localStorage.setItem("agorai.theme", theme);
+  applyTheme();
+}
+
 async function renameSession(id, current) {
   const name = prompt("Rename session", current);
   if (name === null) return;
@@ -770,29 +785,41 @@ function clearChecked() {
   renderSessions();
 }
 
-// The bulk-action bar in the sidebar header — shown only while something's ticked.
+// Which sessions the bulk actions apply to: the ticked ones, or — when nothing
+// is ticked — just the currently selected session.
+function bulkTargets() {
+  if (state.checked.size) return [...state.checked];
+  return state.selected ? [state.selected] : [];
+}
+
+// The bulk-action bar in the sidebar header. Delete / Mark unread are always
+// shown; they act on the ticked sessions, or the selected one if none are ticked.
 function renderBulk() {
   const bar = document.getElementById("bulk-bar");
   const n = state.checked.size;
-  if (!n) { bar.hidden = true; bar.innerHTML = ""; return; }
+  const scope = n > 0 ? "selected" : "current";
+  const dis = n > 0 || state.selected ? "" : "disabled";
   bar.hidden = false;
-  bar.innerHTML = `<span class="bulk-n">${n} selected</span>` +
-    `<button class="bulk-mark" onclick="markCheckedUnread()" title="Mark selected as finished/unread (blinking green)">Mark unread</button>` +
-    `<button class="bulk-del" onclick="deleteChecked()" title="Close the selected sessions">Delete</button>` +
-    `<button class="bulk-clear" onclick="clearChecked()" title="Clear selection">✕</button>`;
+  bar.innerHTML =
+    (n > 0 ? `<span class="bulk-n">${n} selected</span>` : "") +
+    `<button class="bulk-mark" ${dis} onclick="markUnread()" title="Mark ${scope} finished/unread (blinking green)">Mark unread</button>` +
+    `<button class="bulk-del" ${dis} onclick="deleteTargets()" title="Close the ${scope} session${n > 1 ? "s" : ""}">Delete</button>` +
+    (n > 0 ? `<button class="bulk-clear" onclick="clearChecked()" title="Clear selection">✕</button>` : "");
 }
 
-// Flag the selected sessions as finished-but-unviewed (the green blinking state),
+// Flag the target sessions as finished-but-unviewed (the green blinking state),
 // the same client-side "unread" mark the control WS sets on a working→idle turn.
-function markCheckedUnread() {
-  for (const id of state.checked) state.unread.add(id);
+function markUnread() {
+  const ids = bulkTargets();
+  if (!ids.length) return;
+  ids.forEach((id) => state.unread.add(id));
   state.checked.clear();
   lastCheckedId = null;
   renderSessions();
 }
 
-async function deleteChecked() {
-  const ids = [...state.checked];
+async function deleteTargets() {
+  const ids = bulkTargets();
   if (!ids.length) return;
   if (!confirm(`Close ${ids.length} session${ids.length > 1 ? "s" : ""}? They won't be resumed on restart.`)) return;
   await Promise.all(ids.map((id) => fetch(`/api/sessions/${id}`, { method: "DELETE" }).catch(() => {})));
@@ -1501,6 +1528,7 @@ loadOrder();
 initDragReorder();
 renderTopBar();
 loadConfig();
+applyTheme(); // restore the last light/dark choice
 applyPromptPanel(); // restore the prompt panel's last open/closed state
 connectControl();
 

@@ -19,9 +19,11 @@
     <div class="logo">Agor<span>AI</span></div>
     <div class="newbar" id="newbar"><!-- rendered from /api/buttons --></div>
     <div class="meta" id="meta">—</div>
-    <button class="icon-btn" id="sound-btn" onclick="toggleSound()" title="Toggle alert sounds">🔊</button>
+    <button class="icon-btn mono" id="sound-btn" onclick="toggleSound()" title="Toggle alert sounds">🔊</button>
     <button class="icon-btn" id="buttons-btn" onclick="openButtonsManager()" title="Manage launch buttons">▦</button>
+    <button class="icon-btn mono" id="debug-btn" onclick="openDebug()" title="Show permission-prompt debug (what the parser saw)">🐞</button>
     <button class="icon-btn" id="settings-btn" onclick="openSettings()" title="Settings">⚙</button>
+    <button class="icon-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle light / dark theme">◐</button>
   </div>
 
   <div class="split">
@@ -43,7 +45,6 @@
         <span class="t-right" id="t-right"></span>
         <button class="goal-start" id="goal-start-btn" hidden onclick="startPendingGoal()">🎯 Start goal</button>
         <button class="icon-btn" id="prompts-btn" onclick="togglePromptPanel()" title="List this session's prompts — click one to jump to it">☰</button>
-        <button class="icon-btn" id="debug-btn" onclick="openDebug()" title="Show permission-prompt debug (what the parser saw)">🐞</button>
       </div>
       <div id="findbar">
         <input id="find-input" placeholder="Find in terminal…" autocomplete="off" oninput="doFind('incremental')">
