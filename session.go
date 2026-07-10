@@ -43,17 +43,19 @@ type Session struct {
 	// account usage-limit windows: used percent + unix reset per window
 	limit5hPct, limitWkPct     int
 	limit5hReset, limitWkReset int64
-	limitsAt                   int64 // unix seconds the limits above were sampled (codex: turn time; claude: fetch time) — used to pick the freshest session per agent
-	promptQ     string         // parsed question for a permission prompt
-	promptCtx   string         // parsed context lines above the question (for the tooltip)
-	promptOpts  []PromptOption // parsed options for a permission prompt
-	resumeOf    string         // claude id we resumed from; cleaned up once the live id is known
-	tailing     bool           // a codex rollout-state tailer is running for this session
-	pendingGoal string         // a "/goal …" directive to inject after the first turn (New-PR goal)
-	ptmx        *os.File
-	cmd         *exec.Cmd
-	ring        *ringBuffer
-	clients     map[chan []byte]bool // attached terminal WebSockets
+	limitsAt                   int64          // unix seconds the limits above were sampled (codex: turn time; claude: fetch time) — used to pick the freshest session per agent
+	promptQ                    string         // parsed question for a permission prompt
+	promptCtx                  string         // parsed context lines above the question (for the tooltip)
+	promptOpts                 []PromptOption // parsed options for a permission prompt
+	resumeOf                   string         // claude id we resumed from; cleaned up once the live id is known
+	tailing                    bool           // a codex rollout-state tailer is running for this session
+	pendingGoal                string         // a "/goal …" directive to inject after the first turn (New-PR goal)
+	lastRows                   uint16         // last PTY size, so an unchanged resize doesn't SIGWINCH
+	lastCols                   uint16         // (a redundant repaint duplicates chunks into the scrollback)
+	ptmx                       *os.File
+	cmd                        *exec.Cmd
+	ring                       *ringBuffer
+	clients                    map[chan []byte]bool // attached terminal WebSockets
 }
 
 // SessionDTO is the JSON shape sent to the browser.
@@ -283,10 +285,15 @@ func (s *Session) setResumeOf(id string) {
 func (s *Session) resize(rows, cols uint16) {
 	s.mu.Lock()
 	f := s.ptmx
+	same := rows == s.lastRows && cols == s.lastCols
+	s.lastRows, s.lastCols = rows, cols
 	s.mu.Unlock()
-	if f != nil {
-		_ = pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols})
+	// Skip an unchanged resize: it would SIGWINCH claude into a needless repaint,
+	// and repainting a scrolled TUI leaves a duplicate copy in the scrollback.
+	if f == nil || same {
+		return
 	}
+	_ = pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols})
 }
 
 // resizeRepaint sets the PTY size like resize, but when the size is unchanged
@@ -296,6 +303,7 @@ func (s *Session) resize(rows, cols uint16) {
 func (s *Session) resizeRepaint(rows, cols uint16) {
 	s.mu.Lock()
 	f := s.ptmx
+	s.lastRows, s.lastCols = rows, cols // record: subsequent equal resizes are now no-ops
 	s.mu.Unlock()
 	if f == nil {
 		return
@@ -499,17 +507,19 @@ func (m *Manager) spawn(agent AgentKind, id, cwd, name, branch string, excludeEn
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 
 	s := &Session{
-		ID:      id,
-		agent:   agent,
-		name:    name,
-		cwd:     cwd,
-		branch:  branch,
-		state:   StateIdle, // hooks flip to working on UserPromptSubmit
-		recap:   "Starting…",
-		ptmx:    ptmx,
-		cmd:     cmd,
-		ring:    newRingBuffer(m.ringBytes()),
-		clients: map[chan []byte]bool{},
+		ID:       id,
+		agent:    agent,
+		name:     name,
+		cwd:      cwd,
+		branch:   branch,
+		state:    StateIdle, // hooks flip to working on UserPromptSubmit
+		recap:    "Starting…",
+		lastRows: rows,
+		lastCols: cols,
+		ptmx:     ptmx,
+		cmd:      cmd,
+		ring:     newRingBuffer(m.ringBytes()),
+		clients:  map[chan []byte]bool{},
 	}
 
 	m.mu.Lock()
