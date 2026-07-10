@@ -47,6 +47,7 @@ function connectControl() {
       state.sessions = next;
       renderSessions();
       renderQuota();
+      schedulePromptReload(); // pick up prompts added since the last snapshot
     }
   };
   controlWs.onclose = () => setTimeout(connectControl, 1000); // reconnect
@@ -340,6 +341,7 @@ function selectSession(id) {
 
   updateTermHead();
   renderSessions();
+  loadPrompts(false); // refresh the jump list for the newly selected session
 
   // Move the cursor into the terminal so the user can type straight away.
   // Defer so it runs after renderSessions() rebuilt the list (which can steal
@@ -460,6 +462,121 @@ function activeSearch() {
   return t ? t.search : null;
 }
 
+/* ---------- prompt list: jump to any prompt in the session ---------- */
+let promptsOpen = localStorage.getItem("agorai.prompts") === "1";
+
+// Show/hide the panel and refit the terminal (its width changed).
+function applyPromptPanel() {
+  document.getElementById("prompt-panel").hidden = !promptsOpen;
+  document.getElementById("pp-resizer").hidden = !promptsOpen;
+  document.getElementById("prompts-btn").classList.toggle("on", promptsOpen);
+  const t = state.terms.get(state.selected);
+  if (t) requestAnimationFrame(() => { t.fit.fit(); sendResize(t.ws, t.term); });
+}
+
+function togglePromptPanel(force) {
+  promptsOpen = force === undefined ? !promptsOpen : !!force;
+  localStorage.setItem("agorai.prompts", promptsOpen ? "1" : "0");
+  applyPromptPanel();
+  if (promptsOpen) loadPrompts(true);
+}
+
+// Fetch the selected session's prompts. Re-renders only when the session or the
+// prompt count changed (or force), so live auto-refresh doesn't wipe scroll/
+// selection each snapshot.
+async function loadPrompts(force) {
+  if (!promptsOpen) return;
+  const id = state.selected;
+  const list = document.getElementById("prompt-list");
+  if (!id) { list.innerHTML = `<div class="pp-empty">No session selected.</div>`; list.dataset.for = ""; list.dataset.count = ""; return; }
+  const sess = state.sessions.find((s) => s.id === id);
+  if (sess && sess.agent !== "claude") { // codex prompts live in rollout files — not wired yet
+    list.innerHTML = `<div class="pp-empty">Prompt list is Claude-only for now.</div>`;
+    list.dataset.for = id; list.dataset.count = "-1";
+    return;
+  }
+  const changedSession = list.dataset.for !== id;
+  const prompts = await fetch(`/api/sessions/${id}/prompts`).then((r) => r.json()).catch(() => []);
+  if (state.selected !== id) return; // selection moved on while fetching
+  if (!force && !changedSession && +list.dataset.count === prompts.length) return; // nothing new
+  list.dataset.for = id;
+  list.dataset.count = prompts.length;
+  renderPromptList(prompts);
+}
+
+function renderPromptList(prompts) {
+  const list = document.getElementById("prompt-list");
+  if (!prompts || !prompts.length) {
+    list.innerHTML = `<div class="pp-empty">No prompts yet.</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  prompts.forEach((p, i) => {
+    const el = document.createElement("div");
+    el.className = "pp-item";
+    el.title = p.text;
+    el.innerHTML = `<span class="pp-n">${i + 1}</span><span class="pp-t">${esc(p.text)}</span>`;
+    el.onclick = () => jumpToPrompt(p.key, el);
+    list.appendChild(el);
+  });
+}
+
+// Scroll the terminal to where this prompt appears and highlight it. Uses the
+// search addon (wraps around, so it finds the match wherever it is); falls back
+// to a manual buffer scan. A miss means it scrolled out of the buffer.
+function jumpToPrompt(key, el) {
+  document.querySelectorAll("#prompt-list .pp-item.active").forEach((n) => n.classList.remove("active"));
+  if (el) el.classList.add("active");
+  const t = state.terms.get(state.selected);
+  if (!t || !key) return;
+
+  let found = false;
+  if (t.search) {
+    try { found = t.search.findNext(key, { caseSensitive: false, decorations: FIND_DECORATIONS }); }
+    catch { try { found = t.search.findNext(key); } catch {} }
+  }
+  if (!found) found = scrollToKey(t.term, key);
+  if (!found && el) { el.classList.add("miss"); setTimeout(() => el.classList.remove("miss"), 700); }
+
+  // The search highlight anchors to buffer positions and gets misplaced when the
+  // terminal reflows on resize — so make it a brief flash that clears itself.
+  if (found && t.search) {
+    clearTimeout(jumpToPrompt._t);
+    jumpToPrompt._t = setTimeout(() => clearJumpDecorations(), 2500);
+  }
+}
+
+// Drop the jump highlight (search decorations) — called after the flash and on
+// any resize, since decorations scatter on reflow. An open find bar owns the
+// decorations, so leave those alone.
+function clearJumpDecorations() {
+  clearTimeout(jumpToPrompt._t);
+  if (document.getElementById("findbar").classList.contains("open")) return;
+  const t = state.terms.get(state.selected);
+  if (t && t.search) { try { t.search.clearDecorations(); } catch {} }
+  document.querySelectorAll("#prompt-list .pp-item.active").forEach((n) => n.classList.remove("active"));
+}
+
+function scrollToKey(term, key) {
+  const buf = term.buffer.active;
+  const needle = key.toLowerCase();
+  for (let i = 0; i < buf.length; i++) {
+    const ln = buf.getLine(i);
+    if (ln && ln.translateToString(true).toLowerCase().includes(needle)) {
+      term.scrollToLine(Math.max(0, i - 1));
+      return true;
+    }
+  }
+  return false;
+}
+
+let _promptReloadT = null;
+function schedulePromptReload() {
+  if (!promptsOpen) return;
+  clearTimeout(_promptReloadT);
+  _promptReloadT = setTimeout(() => loadPrompts(false), 800);
+}
+
 function openFind() {
   if (!state.selected) return;
   document.getElementById("findbar").classList.add("open");
@@ -532,6 +649,7 @@ function sendResize(ws, term) {
 // frames. Reflow the display live, but tell the PTY only once it settles.
 let winResizeTimer = null;
 window.addEventListener("resize", () => {
+  clearJumpDecorations(); // reflow scatters the jump highlight — drop it
   const t = state.terms.get(state.selected);
   if (!t) return;
   t.fit.fit();
@@ -553,6 +671,7 @@ window.addEventListener("resize", () => {
   gutter.addEventListener("mousedown", (e) => {
     dragging = true;
     document.body.classList.add("resizing");
+    clearJumpDecorations(); // dragging the divider reflows the terminal
     e.preventDefault();
   });
   document.addEventListener("mousemove", (e) => {
@@ -567,6 +686,40 @@ window.addEventListener("resize", () => {
     dragging = false;
     document.body.classList.remove("resizing");
     localStorage.setItem(KEY, parseInt(sidebar.style.width, 10));
+    const t = state.terms.get(state.selected);
+    if (t) { t.fit.fit(); sendResize(t.ws, t.term); }
+  });
+})();
+
+/* ---------- draggable resize of the prompt panel (widen to show more text) ---------- */
+
+(function initPromptResizer() {
+  const panel = document.getElementById("prompt-panel");
+  const handle = document.getElementById("pp-resizer");
+  const KEY = "agorai.promptWidth";
+
+  const saved = parseInt(localStorage.getItem(KEY) || "", 10);
+  if (saved) panel.style.width = saved + "px";
+
+  let dragging = false;
+  handle.addEventListener("mousedown", (e) => {
+    dragging = true;
+    document.body.classList.add("resizing");
+    clearJumpDecorations(); // dragging the divider reflows the terminal
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const w = Math.min(Math.max(window.innerWidth - e.clientX, 180), window.innerWidth - 400);
+    panel.style.width = w + "px";
+    const t = state.terms.get(state.selected);
+    if (t) t.fit.fit(); // reflow live; tell the PTY on mouseup
+  });
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("resizing");
+    localStorage.setItem(KEY, parseInt(panel.style.width, 10));
     const t = state.terms.get(state.selected);
     if (t) { t.fit.fit(); sendResize(t.ws, t.term); }
   });
@@ -1348,6 +1501,7 @@ loadOrder();
 initDragReorder();
 renderTopBar();
 loadConfig();
+applyPromptPanel(); // restore the prompt panel's last open/closed state
 connectControl();
 
 // Deep-link: agorai/#session=<id> focuses that session — used by the GNOME

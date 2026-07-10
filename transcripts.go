@@ -170,6 +170,85 @@ func parseTranscript(path string, mod time.Time) (Resumable, bool) {
 	}, true
 }
 
+// Prompt is one user message from a session transcript, for the jump-to-prompt
+// list. Text is a display label; Key is a short leading substring of the prompt
+// the frontend locates in the terminal scrollback to scroll there.
+type Prompt struct {
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+	Key   string `json:"key"`
+}
+
+// sessionPrompts returns the human-typed prompts of a Claude transcript, in
+// order — skipping tool results and Claude Code's synthetic/system messages.
+func sessionPrompts(path string) []Prompt {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var out []Prompt
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadString('\n')
+		if len(line) > 0 {
+			if p, ok := parsePromptLine([]byte(line), len(out)); ok {
+				out = append(out, p)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return out
+}
+
+func parsePromptLine(line []byte, index int) (Prompt, bool) {
+	var e transcriptEntry
+	if json.Unmarshal(line, &e) != nil || len(e.Message) == 0 {
+		return Prompt{}, false
+	}
+	var m transcriptMessage
+	if json.Unmarshal(e.Message, &m) != nil {
+		return Prompt{}, false
+	}
+	role := m.Role
+	if role == "" {
+		role = e.Type
+	}
+	if role != "user" {
+		return Prompt{}, false
+	}
+	text := strings.TrimSpace(extractText(m.Content))
+	if text == "" || isSyntheticPrompt(text) {
+		return Prompt{}, false // tool result, command echo, or a Claude Code system note
+	}
+	return Prompt{Index: index, Text: truncate(oneLine(text), 90), Key: promptKey(text)}, true
+}
+
+// isSyntheticPrompt drops user-role lines that aren't something the human typed:
+// tool results (empty text), command wrappers, and Claude Code's injected notes.
+func isSyntheticPrompt(text string) bool {
+	return strings.HasPrefix(text, "<") || // <command-name>, <local-command-*>, <bash-*>
+		strings.HasPrefix(text, "Caveat:") ||
+		strings.HasPrefix(text, "[Request interrupted")
+}
+
+// promptKey is a plain (no ellipsis) leading slice of the prompt's first line —
+// distinctive enough to locate, short enough to sit on one wrapped terminal row.
+func promptKey(text string) string {
+	line := text
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	r := []rune(strings.TrimSpace(line))
+	if len(r) > 48 {
+		r = r[:48]
+	}
+	return strings.TrimSpace(string(r))
+}
+
 // lastAssistantInfo returns the last assistant text (one line, truncated) and
 // the raw model id of the last assistant message — the latter reveals what
 // model a "default" session actually runs on. It reads only the tail of the

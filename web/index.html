@@ -42,6 +42,7 @@
         <span class="t-cwd" id="t-cwd"></span>
         <span class="t-right" id="t-right"></span>
         <button class="goal-start" id="goal-start-btn" hidden onclick="startPendingGoal()">🎯 Start goal</button>
+        <button class="icon-btn" id="prompts-btn" onclick="togglePromptPanel()" title="List this session's prompts — click one to jump to it">☰</button>
         <button class="icon-btn" id="debug-btn" onclick="openDebug()" title="Show permission-prompt debug (what the parser saw)">🐞</button>
       </div>
       <div id="findbar">
@@ -51,8 +52,19 @@
         <button onclick="doFind('next')" title="Next (Enter)">↓</button>
         <button onclick="closeFind()" title="Close (Esc)">✕</button>
       </div>
-      <div id="term-host">
-        <div class="empty" id="empty">No session selected. Use the buttons in the top bar to start one.</div>
+      <div class="term-area">
+        <div id="term-host">
+          <div class="empty" id="empty">No session selected. Use the buttons in the top bar to start one.</div>
+        </div>
+        <div class="pp-resizer" id="pp-resizer" hidden></div>
+        <aside id="prompt-panel" hidden>
+          <div class="pp-head">
+            <span>Prompts</span>
+            <button class="pp-refresh" onclick="loadPrompts(true)" title="Refresh">⟳</button>
+            <button class="pp-x" onclick="togglePromptPanel(false)" title="Hide">✕</button>
+          </div>
+          <div id="prompt-list"></div>
+        </aside>
       </div>
     </section>
   </div>

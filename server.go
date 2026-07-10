@@ -48,6 +48,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("PATCH /api/sessions/{id}", s.handleRenameSession)
 	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleActivateGoal)
+	mux.HandleFunc("GET /api/sessions/{id}/prompts", s.handlePrompts)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /hook", s.handleHook)
 	mux.HandleFunc("POST /api/usage", s.handleUsage)
@@ -252,6 +253,25 @@ func (s *Server) handleActivateGoal(w http.ResponseWriter, r *http.Request) {
 	sess.writeInput([]byte("/goal " + cond + "\r"))
 	s.broadcastSessions() // the pending-goal chip clears once the DTO no longer carries it
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePrompts lists a session's user prompts (from its Claude transcript) for
+// the jump-to-prompt panel. Empty for Codex or before the transcript exists.
+func (s *Server) handlePrompts(w http.ResponseWriter, r *http.Request) {
+	sess := s.mgr.Get(r.PathValue("id"))
+	if sess == nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	var prompts []Prompt
+	if sess.agent == AgentClaude {
+		if cid := sess.claudeID(); cid != "" {
+			if p := transcriptPathFor(cid); p != "" {
+				prompts = sessionPrompts(p)
+			}
+		}
+	}
+	writeJSON(w, prompts)
 }
 
 type createReq struct {
