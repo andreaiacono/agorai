@@ -496,12 +496,16 @@ async function loadPrompts(force) {
     return;
   }
   const changedSession = list.dataset.for !== id;
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
   const prompts = await fetch(`/api/sessions/${id}/prompts`).then((r) => r.json()).catch(() => []);
   if (state.selected !== id) return; // selection moved on while fetching
   if (!force && !changedSession && +list.dataset.count === prompts.length) return; // nothing new
   list.dataset.for = id;
   list.dataset.count = prompts.length;
   renderPromptList(prompts);
+  // Position on the latest prompt on open/select/refresh, and keep it stuck to the
+  // bottom on background refresh — unless you've scrolled up to read an earlier one.
+  if (force || changedSession || nearBottom) list.scrollTop = list.scrollHeight;
 }
 
 function renderPromptList(prompts) {
