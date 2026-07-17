@@ -154,17 +154,19 @@ func parsePermissionPrompt(raw []byte) (string, string, []PromptOption) {
 	}
 
 	// The latest frame normally wins, but a repaint while the prompt sits on
-	// screen can eat the "." after an option number, so that line no longer
-	// parses and the newest frame comes out with fewer options than are really
-	// shown. If the newest frame is incomplete, fall back to the nearest earlier
-	// complete frame it's consistent with — the same prompt, fully rendered.
-	best := frames[len(frames)-1]
-	if !frameComplete(best.opts) {
-		for i := len(frames) - 2; i >= 0; i-- {
-			if frameComplete(frames[i].opts) && frameConsistent(best.opts, frames[i].opts) {
-				best = frames[i]
-				break
-			}
+	// screen shreds lines: it can eat the "." after an option number (dropping
+	// that option) or a letter out of the question ("Do you want to proc ed?").
+	// A frame damaged that way can still look complete — losing the trailing
+	// "3. No" leaves a contiguous 1..2 — so completeness alone can't detect it.
+	// Fall back to the nearest earlier frame that renders the same prompt more
+	// fully; that copy also carries an intact question and context.
+	latest := frames[len(frames)-1]
+	best := latest
+	for i := len(frames) - 2; i >= 0; i-- {
+		f := frames[i]
+		if len(f.opts) > len(best.opts) && frameComplete(f.opts) && frameConsistent(latest.opts, f.opts) {
+			best = f
+			break
 		}
 	}
 

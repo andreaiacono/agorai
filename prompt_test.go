@@ -122,6 +122,31 @@ func TestParsePermissionPrompt_mangledRedraw(t *testing.T) {
 	}
 }
 
+func TestParsePermissionPrompt_damagedRedrawStillLooksComplete(t *testing.T) {
+	// A repaint ate the "." from "3. No" and a letter out of the question. The
+	// newest frame still looks complete (contiguous 1..2), so completeness alone
+	// can't spot the damage — the parser must notice the earlier frame renders the
+	// same prompt more fully, or the No button vanishes and the question reads
+	// "Do you want to proc ed?".
+	raw := []byte("This command requires approval\r\r\n" +
+		"Do you want to proceed?\r\r\n" +
+		"❯ 1. Yes\r\r\n" +
+		"  2. Yes, and don’t ask again for: nohup npx vite preview --port 4328\r\r\n" +
+		"  3. No\r\r\n" +
+		"Esc to cancel · Tab to amend · ctrl+e to explain\r" +
+		"Do you want to proc ed?\r ❯ 1. Yes\r   2. Yes, and don’t ask again for: nohup npx vite preview --port 4328\r   3 No\r")
+	q, _, opts := parsePermissionPrompt(raw)
+	if len(opts) != 3 {
+		t.Fatalf("want 3 options, got %d: %+v", len(opts), opts)
+	}
+	if opts[2].Label != "No" {
+		t.Errorf("option 3 wrong: %+v", opts[2])
+	}
+	if q != "Do you want to proceed?" {
+		t.Errorf("want the intact question, got %q", q)
+	}
+}
+
 func TestParsePermissionPrompt_mangledRedrawOfDifferentPrompt(t *testing.T) {
 	// an incomplete newest frame must NOT inherit options from an older frame
 	// whose labels don't agree (that's a different prompt, not a re-render)
