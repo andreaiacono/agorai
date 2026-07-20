@@ -154,25 +154,22 @@ body {
 .qrow-empty .qname, .qrow-empty .qmeta { color: var(--dim); font-weight: 400; }
 .qrow-empty .agent-ic { opacity: .4; }
 
-.side-head { display: flex; align-items: center; padding: 8px 8px 6px; }
+.side-head { display: flex; align-items: center; justify-content: center; padding: 8px 8px 6px; }
 .side-head .ttl {
-  flex: 1; color: var(--dim); text-transform: uppercase;
+  color: var(--dim); text-transform: uppercase;
   letter-spacing: 1px; font-size: 10px;
 }
-.bulk { display: inline-flex; align-items: center; gap: 6px; }
-.bulk-n { color: var(--dim); font-size: 10px; }
-.bulk-mark, .bulk-del, .bulk-clear {
-  font: inherit; font-size: 10px; cursor: pointer;
+/* Mark unread / Delete — in the active session's header (#th-mark / #th-del),
+   acting on the ticked sessions or the current one. */
+.bulk-mark, .bulk-del {
+  font: inherit; font-size: 11px; cursor: pointer;
   background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px;
+  border: 1px solid var(--border); border-radius: 5px; padding: 3px 9px;
 }
 .bulk-mark { color: var(--green); border-color: rgba(63, 185, 80, .4); }
 .bulk-mark:hover { background: var(--green); color: #06210d; border-color: var(--green); }
 .bulk-del { color: var(--red); border-color: rgba(240, 80, 110, .4); }
 .bulk-del:hover { background: var(--red); color: #1a0b0e; border-color: var(--red); }
-.bulk-clear { padding: 2px 6px; }
-.bulk-clear:hover { border-color: var(--accent); }
-.bulk-mark:disabled, .bulk-del:disabled { opacity: .4; pointer-events: none; }
 .new-btn {
   font: inherit; font-size: 11px;
   background: var(--panel-2); color: var(--text);

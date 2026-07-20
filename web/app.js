@@ -92,7 +92,7 @@ function renderSessions() {
   for (const s of orderedSessions()) {
     list.appendChild(sessionCard(s));
   }
-  renderBulk();
+  updateSessionActions();
   updateTermHead(); // keep the focused session's context readout current
   disposeStaleTerminals();
   // "needs attention" = a pending permission, or anything that wants you and
@@ -783,11 +783,6 @@ function toggleChecked(id, checked, shift) {
   renderSessions();
 }
 
-function clearChecked() {
-  state.checked.clear();
-  lastCheckedId = null;
-  renderSessions();
-}
 
 // Which sessions the bulk actions apply to: the ticked ones, or — when nothing
 // is ticked — just the currently selected session.
@@ -796,19 +791,21 @@ function bulkTargets() {
   return state.selected ? [state.selected] : [];
 }
 
-// The bulk-action bar in the sidebar header. Delete / Mark unread are always
-// shown; they act on the ticked sessions, or the selected one if none are ticked.
-function renderBulk() {
-  const bar = document.getElementById("bulk-bar");
+// Mark unread / Delete live in the active session's header. They act on the
+// ticked sessions, or the current one if none are ticked; hidden when there's no
+// target, and labelled with the count when a multi-selection is in play.
+function updateSessionActions() {
+  const mark = document.getElementById("th-mark");
+  const del = document.getElementById("th-del");
   const n = state.checked.size;
-  const scope = n > 0 ? "selected" : "current";
-  const dis = n > 0 || state.selected ? "" : "disabled";
-  bar.hidden = false;
-  bar.innerHTML =
-    (n > 0 ? `<span class="bulk-n">${n} selected</span>` : "") +
-    `<button class="bulk-mark" ${dis} onclick="markUnread()" title="Mark ${scope} finished/unread (blinking green)">Mark unread</button>` +
-    `<button class="bulk-del" ${dis} onclick="deleteTargets()" title="Close the ${scope} session${n > 1 ? "s" : ""}">Delete</button>` +
-    (n > 0 ? `<button class="bulk-clear" onclick="clearChecked()" title="Clear selection">✕</button>` : "");
+  const has = n > 0 || !!state.selected;
+  mark.hidden = del.hidden = !has;
+  if (!has) return;
+  const scope = n > 0 ? `${n} selected session${n > 1 ? "s" : ""}` : "this session";
+  mark.textContent = n > 0 ? `Mark unread (${n})` : "Mark unread";
+  del.textContent = n > 0 ? `Delete (${n})` : "Delete";
+  mark.title = `Mark ${scope} finished/unread (blinking green)`;
+  del.title = `Close ${scope}`;
 }
 
 // Flag the target sessions as finished-but-unviewed (the green blinking state),

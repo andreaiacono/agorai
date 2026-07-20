@@ -31,7 +31,6 @@
       <div class="quota-panel" id="quota-panel"><!-- per-agent account quota, rendered from sessions' limits --></div>
       <div class="side-head">
         <span class="ttl">Sessions</span>
-        <span class="bulk" id="bulk-bar" hidden></span>
       </div>
       <div id="session-list"></div>
     </aside>
@@ -45,6 +44,8 @@
         <span class="t-right" id="t-right"></span>
         <button class="goal-start" id="goal-start-btn" hidden onclick="startPendingGoal()">🎯 Start goal</button>
         <button class="icon-btn" id="prompts-btn" onclick="togglePromptPanel()" title="List this session's prompts — click one to jump to it">☰</button>
+        <button class="bulk-mark" id="th-mark" hidden onclick="markUnread()">Mark unread</button>
+        <button class="bulk-del" id="th-del" hidden onclick="deleteTargets()">Delete</button>
       </div>
       <div id="findbar">
         <input id="find-input" placeholder="Find in terminal…" autocomplete="off" oninput="doFind('incremental')">
