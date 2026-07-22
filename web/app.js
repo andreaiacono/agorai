@@ -238,8 +238,15 @@ function updateTermHead() {
   if (s && s.pendingGoal) gb.title = "Start Claude's /goal now — loop toward: " + s.pendingGoal;
   if (!s) return;
   document.getElementById("t-name").textContent = s.name;
-  document.getElementById("t-cwd").textContent = s.cwd + " · " + s.branch;
+  const cwd = document.getElementById("t-cwd");
+  cwd.textContent = truncPath(s.cwd, 50) + " · " + s.branch;
+  cwd.title = s.cwd + " · " + s.branch; // full path on hover
   document.getElementById("t-right").innerHTML = "Model: " + esc(s.model) + ctxReadout(s);
+}
+
+// Cap a path at max chars, keeping the useful tail (leading … when trimmed).
+function truncPath(p, max) {
+  return p.length <= max ? p : "…" + p.slice(-(max - 1));
 }
 
 // Submit the session's queued /goal condition now (user clicked "Start goal"

@@ -955,18 +955,28 @@ func (s *Server) promptStillOnScreen(sess *Session) bool {
 }
 
 // parsePromptSoon reads the session's recent output and extracts the prompt's
-// real options. The box may not be fully drawn when the hook fires, so it polls
-// briefly. Falls through silently if nothing parseable shows up (the UI then
-// uses generic Yes/No/Always buttons).
+// real options. The state flips (and broadcasts) the moment the hook fires, but
+// the question and buttons need the box actually drawn on screen — so poll for
+// it: fast at first, since it usually lands within a frame or two, then easing
+// off, and keep trying for as long as the prompt is still up. A short fixed
+// budget used to expire while a slow prompt was still rendering, leaving the
+// panel with no question at all even though the notification had already fired.
 func (s *Server) parsePromptSoon(sess *Session) {
-	for i := 0; i < 8; i++ {
+	deadline := time.Now().Add(10 * time.Second)
+	for wait := 25 * time.Millisecond; time.Now().Before(deadline); {
+		if sess.currentState() != StatePerm {
+			return // answered, or moved on — nothing left to show
+		}
 		q, ctx, opts := parsePermissionPrompt(sess.recentBytes(16 * 1024))
 		if len(opts) > 0 {
 			sess.setPrompt(q, ctx, opts)
 			s.broadcastSessions()
 			return
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(wait)
+		if wait < 250*time.Millisecond {
+			wait += 25 * time.Millisecond
+		}
 	}
 }
 
