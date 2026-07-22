@@ -49,6 +49,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/sessions/{id}", s.handleRenameSession)
 	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleActivateGoal)
 	mux.HandleFunc("GET /api/sessions/{id}/prompts", s.handlePrompts)
+	mux.HandleFunc("POST /api/sessions/{id}/select", s.handleSelectSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /hook", s.handleHook)
 	mux.HandleFunc("POST /api/usage", s.handleUsage)
@@ -252,6 +253,19 @@ func (s *Server) handleActivateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.writeInput([]byte("/goal " + cond + "\r"))
 	s.broadcastSessions() // the pending-goal chip clears once the DTO no longer carries it
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSelectSession asks any open dashboard to focus a session. The GNOME
+// extension calls it after raising the agorai window, so clicking a session in
+// the top bar lands on that session instead of whatever was last open.
+func (s *Server) handleSelectSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.mgr.Get(id) == nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	s.hub.broadcast(mustJSON(map[string]any{"type": "select", "id": id}))
 	w.WriteHeader(http.StatusNoContent)
 }
 

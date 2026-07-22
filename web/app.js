@@ -48,6 +48,9 @@ function connectControl() {
       renderSessions();
       renderQuota();
       schedulePromptReload(); // pick up prompts added since the last snapshot
+    } else if (msg.type === "select" && msg.id) {
+      // The GNOME extension raised our window and wants this session shown.
+      if (state.sessions.some((s) => s.id === msg.id)) selectSession(msg.id);
     }
   };
   controlWs.onclose = () => setTimeout(connectControl, 1000); // reconnect

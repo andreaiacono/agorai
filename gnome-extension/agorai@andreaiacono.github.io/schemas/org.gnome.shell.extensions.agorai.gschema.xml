@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.agorai" path="/org/gnome/shell/extensions/agorai/">
+    <key name="show-notifications" type="b">
+      <default>true</default>
+      <summary>Show desktop notifications</summary>
+      <description>
+        Raise a desktop notification when a session asks for permission or
+        finishes a turn. The top-bar indicator and its badge keep working either way.
+      </description>
+    </key>
+  </schema>
+</schemalist>

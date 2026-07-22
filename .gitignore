@@ -1,3 +1,4 @@
 /bin/
 *.out
 .DS_Store
+gnome-extension/*/schemas/gschemas.compiled

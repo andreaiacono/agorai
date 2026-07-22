@@ -60,10 +60,11 @@ class AgoraiIndicator extends PanelMenu.Button {
         super._init(0.0, 'agorai', false);
         this._ext = ext;
 
-        // Panel: a terminal glyph + a small count badge.
+        // Panel: the agorai favicon + a small count badge. The icon ships with the
+        // extension (a copy of web/favicon.svg) so it works however it's installed.
         const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
         this._icon = new St.Icon({
-            icon_name: 'utilities-terminal-symbolic',
+            gicon: Gio.icon_new_for_string(`${ext.path}/icon.svg`),
             style_class: 'system-status-icon',
         });
         this._count = new St.Label({
@@ -82,8 +83,12 @@ class AgoraiIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         const open = new PopupMenu.PopupMenuItem('Open agorai');
-        open.connect('activate', () => this._ext.openUrl(BASE));
+        open.connect('activate', () => this._ext.showDashboard());
         this.menu.addMenuItem(open);
+
+        const restart = new PopupMenu.PopupMenuItem('Restart agorai');
+        restart.connect('activate', () => this._ext.restart());
+        this.menu.addMenuItem(restart);
     }
 
     // Rebuild the per-session rows (everything above the separator).
@@ -129,7 +134,7 @@ class AgoraiIndicator extends PanelMenu.Button {
             }
             item.connect('activate', () => {
                 unread.delete(s.id); // viewing it = read
-                this._ext.openUrl(`${BASE}/#session=${s.id}`);
+                this._ext.showSession(s.id);
             });
             this.menu.addMenuItem(item, insertAt++);
         }
@@ -161,6 +166,7 @@ class AgoraiIndicator extends PanelMenu.Button {
 
 export default class AgoraiExtension extends Extension {
     enable() {
+        this._settings = this.getSettings();
         this._http = new Soup.Session();
         this._prev = {};               // id -> last seen state (transition detection)
         this._unread = new Set();       // finished, not yet viewed
@@ -187,6 +193,7 @@ export default class AgoraiExtension extends Extension {
         this._source = null;
         this._http?.abort();
         this._http = null;
+        this._settings = null;
         this._prev = null;
         this._unread = null;
     }
@@ -258,6 +265,8 @@ export default class AgoraiExtension extends Extension {
     }
 
     _notify(title, body, id, urgent) {
+        if (!this._settings?.get_boolean('show-notifications'))
+            return; // notifications turned off in preferences; the badge still updates
         const source = this._ensureSource();
         const n = new MessageTray.Notification({
             source,
@@ -267,7 +276,7 @@ export default class AgoraiExtension extends Extension {
         });
         n.addAction('Open', () => {
             this._unread.delete(id);
-            this.openUrl(`${BASE}/#session=${id}`);
+            this.showSession(id);
         });
         source.addNotification(n);
     }
@@ -277,6 +286,58 @@ export default class AgoraiExtension extends Extension {
             Gio.AppInfo.launch_default_for_uri(url, null);
         } catch (e) {
             logError(e, 'agorai: failed to open URL');
+        }
+    }
+
+    // Raise an already-open dashboard window. The launcher pins the window's
+    // class to "AgorAI" (--class), so match on that first and fall back to the
+    // title. Returns false when there's no window, so callers open one instead.
+    focusWindow() {
+        try {
+            const wins = global.get_window_actors().map(a => a.meta_window).filter(w => !!w);
+            const win = wins.find(w => /agorai/i.test(w.get_wm_class() || '')) ??
+                        wins.find(w => /^agorai\b/i.test(w.get_title() || ''));
+            if (!win)
+                return false;
+            win.activate(global.get_current_time());
+            return true;
+        } catch (e) {
+            logError(e, 'agorai: failed to focus the window');
+            return false;
+        }
+    }
+
+    // Show the dashboard on a given session: raise the existing window and tell
+    // the page to switch, rather than spawning a second window in the browser.
+    showSession(id) {
+        if (this.focusWindow()) {
+            const msg = Soup.Message.new('POST', `${BASE}/api/sessions/${id}/select`);
+            this._http?.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, null);
+            return;
+        }
+        this.openUrl(`${BASE}/#session=${id}`);
+    }
+
+    // "Open agorai": raise the window if it's already up, else open it.
+    showDashboard() {
+        if (!this.focusWindow())
+            this.openUrl(BASE);
+    }
+
+    // Stop the server and start a freshly built one, so a wedged or stale server
+    // is one click away from recovery. Prefers the installed launcher entry (it
+    // owns the path); falls back to the launcher script itself.
+    restart() {
+        try {
+            const app = Gio.DesktopAppInfo.new('agorai-restart.desktop');
+            if (app) {
+                app.launch([], null);
+                return;
+            }
+            const script = GLib.build_filenamev([GLib.get_home_dir(), 'Dropbox', 'etc', 'agorai-launch.sh']);
+            Gio.Subprocess.new([script, '--restart'], Gio.SubprocessFlags.NONE);
+        } catch (e) {
+            logError(e, 'agorai: failed to restart');
         }
     }
 }
