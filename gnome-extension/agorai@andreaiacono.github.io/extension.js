@@ -307,6 +307,25 @@ export default class AgoraiExtension extends Extension {
         }
     }
 
+    // Open the dashboard through the installed launcher entry, so it lands in the
+    // standalone app window — and starts the server if it's down — rather than a
+    // tab in whatever browser is default. uri may be a #session= deep link.
+    launchApp(uri) {
+        try {
+            const app = Gio.DesktopAppInfo.new('agorai.desktop');
+            if (app) {
+                if (uri)
+                    app.launch_uris([uri], null);
+                else
+                    app.launch([], null);
+                return true;
+            }
+        } catch (e) {
+            logError(e, 'agorai: failed to launch the dashboard');
+        }
+        return false; // no launcher entry installed — caller falls back to the browser
+    }
+
     // Show the dashboard on a given session: raise the existing window and tell
     // the page to switch, rather than spawning a second window in the browser.
     showSession(id) {
@@ -315,12 +334,16 @@ export default class AgoraiExtension extends Extension {
             this._http?.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, null);
             return;
         }
-        this.openUrl(`${BASE}/#session=${id}`);
+        const deepLink = `${BASE}/#session=${id}`;
+        if (!this.launchApp(deepLink))
+            this.openUrl(deepLink);
     }
 
-    // "Open agorai": raise the window if it's already up, else open it.
+    // "Open agorai": raise the window if it's already up, else open one.
     showDashboard() {
-        if (!this.focusWindow())
+        if (this.focusWindow())
+            return;
+        if (!this.launchApp(null))
             this.openUrl(BASE);
     }
 
