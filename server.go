@@ -597,7 +597,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 			ensureCodexTrust(res.Cwd)
 			branch := gitOut(res.Cwd, "rev-parse", "--abbrev-ref", "HEAD")
-			sess, err := s.mgr.SpawnAs(AgentCodex, res.Cwd, res.Title, branch, agentFor(AgentCodex).ResumeArgs(req.SessionID)...)
+			args := agentFor(AgentCodex).ResumeArgs(req.SessionID)
+			if req.Unattended {
+				args = append(args, unattendedArgs(AgentCodex)...)
+			}
+			sess, err := s.mgr.SpawnAs(AgentCodex, res.Cwd, res.Title, branch, args...)
 			if err != nil {
 				http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
 				return
@@ -627,6 +631,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			args = append(args, "--fork-session", "--session-id", resumeID)
 		}
 		args = append(args, modelArgs(model)...)
+		if req.Unattended {
+			args = append(args, unattendedArgs(req.Agent)...)
+		}
 		// Name resumed sessions by their first prompt (res.Title), not the repo
 		// folder — otherwise two sessions resumed from the same repo collide.
 		sess, err := s.mgr.Spawn(res.Cwd, res.Title, branch, args...)

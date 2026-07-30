@@ -355,7 +355,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .model-row select:disabled { opacity: 0.45; cursor: not-allowed; }
 .perm-row { display: flex; align-items: center; gap: 7px; margin: 0 16px 10px; color: var(--text); font-size: 11px; cursor: pointer; }
 .perm-row small { color: var(--dim); }
-.modal.resume-mode .perm-row { display: none; } /* resume re-opens an existing session; no launch flags */
 
 .goal-row { display: flex; flex-direction: column; gap: 4px; margin: 0 16px 10px; }
 .goal-row[hidden] { display: none; } /* keep the hidden attribute authoritative over the flex display */

@@ -1223,7 +1223,7 @@ function launchRepo(r) {
 }
 function launchResume(r) {
   const fork = document.getElementById("fork-chk").checked;
-  createSession({ mode: "resume", sessionId: r.sessionId, fork, model: selectedModel(), agent: selectedAgent() });
+  createSession({ mode: "resume", sessionId: r.sessionId, fork, model: selectedModel(), agent: selectedAgent(), unattended: unattendedChecked() });
 }
 
 async function createSession(body) {
