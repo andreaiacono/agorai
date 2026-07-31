@@ -212,17 +212,6 @@ menu, desktop notifications (toggleable in its Preferences), and a **Restart
 agorai** item. It reads the same `/api/sessions` feed the web UI does. See
 [`gnome-extension/`](./gnome-extension/README.md).
 
-## Hand it to a Mac colleague
-
-```
-make mac           # builds bin/agorai-darwin-arm64 and -amd64
-```
-
-Send them the matching binary. First launch on macOS: if it was *downloaded*,
-clear the Gatekeeper quarantine once with `xattr -d com.apple.quarantine ./agorai-darwin-arm64`
-(not needed if copied via scp/git). They still need `claude` installed and the
-hooks configured as above.
-
 ## Notes / rough edges
 
 - **Permission prompts** are parsed from the terminal (`prompt.go`,
