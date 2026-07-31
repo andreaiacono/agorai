@@ -204,6 +204,14 @@ The script forwards each hook's JSON plus the `AGORAI_ID` env var (which agorai
 set when it spawned that `claude`) to the server, which maps it back to the
 right session row.
 
+## GNOME Shell extension (optional)
+
+A top-bar indicator so you can triage sessions without keeping the browser tab
+in front of you: a badge counting sessions that want attention, a click-to-jump
+menu, desktop notifications (toggleable in its Preferences), and a **Restart
+agorai** item. It reads the same `/api/sessions` feed the web UI does. See
+[`gnome-extension/`](./gnome-extension/README.md).
+
 ## Hand it to a Mac colleague
 
 ```

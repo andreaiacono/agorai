@@ -13,6 +13,12 @@ rm -rf "$DEST"
 ln -s "$SRC" "$DEST"
 echo "Linked $DEST -> $SRC"
 
+# The settings schema must be compiled or getSettings() fails and the extension
+# won't load (it reads the notification toggle at enable()).
+if command -v glib-compile-schemas >/dev/null 2>&1; then
+    glib-compile-schemas "$SRC/schemas" && echo "Compiled settings schema"
+fi
+
 if command -v gnome-extensions >/dev/null 2>&1; then
     gnome-extensions enable "$UUID" 2>/dev/null && echo "Enabled $UUID" || \
         echo "Could not enable yet — reload the Shell first, then: gnome-extensions enable $UUID"
