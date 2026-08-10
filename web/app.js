@@ -171,7 +171,7 @@ function agentLimits() {
   return out;
 }
 // Two boxes — the 5-hour window and the weekly window — each with a per-agent
-// gauge and a live "resets in" countdown.
+// gauge and the wall-clock time the window resets.
 const QUOTA_WINDOWS = [
   { label: "Current usage", sub: "5h", pct: "pct5h", reset: "reset5h" },
   { label: "Weekly usage", sub: "7d", pct: "pctWeek", reset: "resetWeek" },
@@ -196,35 +196,51 @@ function renderQuota() {
         continue;
       }
       const pct = Math.min(100, l[win.pct] || 0);
-      const tip = `${label} ${win.label.toLowerCase()} (${win.sub}) · ${pct}% used · resets in ${fmtRemaining(reset)}`;
+      // Two short lines beat one long one: a native tooltip lays out as a single
+      // strip, so the old one-liner grew wider than it could be read comfortably.
+      const tip = `${label} · ${win.sub} window · ${pct}% used\nResets ${fmtResetFull(reset)}`;
       html += `<div class="qrow" title="${esc(tip)}">${icon}<span class="qname">${label}</span>` +
         `<div class="qbar"><span style="width:${pct}%;background:${color};color:${color}"></span></div>` +
-        `<span class="qmeta"><b style="color:${color}">${pct}%</b> · <span class="qreset" data-reset="${reset}">Resets in <span class="qremain">${fmtRemaining(reset)}</span></span></span></div>`;
+        `<span class="qmeta"><b style="color:${color}">${pct}%</b> · <span class="qreset" data-reset="${reset}">${resetHTML(reset)}</span></span></div>`;
     }
     html += `</div>`;
   }
   document.getElementById("quota-panel").innerHTML = html;
 }
 
-// Remaining time until a usage window resets, as "Xd Yh" / "Xh Ym" / "Xm".
-function fmtRemaining(epoch) {
+// When a usage window resets, as a wall-clock time. The weekly window can land
+// days out, where a bare "14:30" would be ambiguous — so name the day as soon as
+// the reset isn't today. Locale-formatted: 24h or am/pm follows the system.
+function fmtResetClock(epoch) {
   if (!epoch) return "—";
-  let secs = epoch - Math.floor(Date.now() / 1000);
-  if (secs <= 0) return "now";
-  const d = Math.floor(secs / 86400); secs -= d * 86400;
-  const h = Math.floor(secs / 3600); secs -= h * 3600;
-  const m = Math.floor(secs / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  const d = new Date(epoch * 1000);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return d.toLocaleDateString([], { weekday: "short" }) + " " + time;
 }
 
-// Refresh just the reset countdowns once a minute — the percentages only change
-// when a new control-WS snapshot arrives, but the countdowns tick on their own.
+// The same instant spelled out in full, for the tooltip — unambiguous even a
+// week ahead, where the row only has room for "Wed 14:30".
+function fmtResetFull(epoch) {
+  if (!epoch) return "unknown";
+  return new Date(epoch * 1000).toLocaleString([], {
+    weekday: "short", day: "numeric", month: "short",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+// One place builds the reset label, so the initial render and the refresh below
+// can't drift apart.
+function resetHTML(epoch) {
+  return 'Resets <span class="qremain">' + esc(fmtResetClock(epoch)) + "</span>";
+}
+
+// Re-render the reset labels once a minute. The times themselves are fixed, but
+// the "today → weekday" wording flips at midnight and when a window rolls over.
 function tickQuotaResets() {
   document.querySelectorAll("#quota-panel .qreset").forEach((el) => {
     const r = +el.dataset.reset;
-    if (r) el.innerHTML = 'Resets in <span class="qremain">' + fmtRemaining(r) + "</span>";
+    if (r) el.innerHTML = resetHTML(r);
   });
 }
 setInterval(tickQuotaResets, 60000);
