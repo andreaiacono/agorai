@@ -210,11 +210,12 @@ function renderQuota() {
 
 // When a usage window resets, as a wall-clock time. The weekly window can land
 // days out, where a bare "14:30" would be ambiguous — so name the day as soon as
-// the reset isn't today. Locale-formatted: 24h or am/pm follows the system.
+// the reset isn't today. Always 00-23: hourCycle pins the clock while the rest
+// of the formatting still follows the system locale.
 function fmtResetClock(epoch) {
   if (!epoch) return "—";
   const d = new Date(epoch * 1000);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   if (d.toDateString() === new Date().toDateString()) return time;
   return d.toLocaleDateString([], { weekday: "short" }) + " " + time;
 }
@@ -225,7 +226,7 @@ function fmtResetFull(epoch) {
   if (!epoch) return "unknown";
   return new Date(epoch * 1000).toLocaleString([], {
     weekday: "short", day: "numeric", month: "short",
-    hour: "2-digit", minute: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
 }
 
