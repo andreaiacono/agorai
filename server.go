@@ -1030,6 +1030,58 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ---- WebSocket keepalive ----
+
+// A suspended laptop leaves half-open sockets behind: the peer is gone but no
+// FIN ever arrives, so ReadMessage blocks forever and the connection's client
+// channel is never released. Only the writer would notice, and an idle session
+// (claude parked at its prompt) never writes. Pinging on the quiet makes a dead
+// peer surface as a read timeout within wsPongWait.
+const (
+	wsPongWait   = 60 * time.Second
+	wsPingPeriod = 25 * time.Second
+	wsWriteWait  = 10 * time.Second
+)
+
+// watchPong arms the read deadline and pushes it out on every pong, so a
+// connection that has stopped answering fails its next read instead of hanging.
+func watchPong(conn *websocket.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
+}
+
+// pumpWrites is the single writer for a connection: frames from ch as message
+// type mt, plus a periodic ping. On any write failure it closes conn, which
+// unblocks the handler's reader so it can run its cleanup — returning quietly
+// (as it used to) left the client registered against a socket nobody was
+// reading. Caller closes done when the handler exits.
+func pumpWrites(conn *websocket.Conn, ch <-chan []byte, mt int, done <-chan struct{}) {
+	ticker := time.NewTicker(wsPingPeriod)
+	defer ticker.Stop()
+	write := func(t int, b []byte) bool {
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+		return conn.WriteMessage(t, b) == nil
+	}
+	for {
+		select {
+		case b, ok := <-ch:
+			if !ok || !write(mt, b) {
+				conn.Close()
+				return
+			}
+		case <-ticker.C:
+			if !write(websocket.PingMessage, nil) {
+				conn.Close()
+				return
+			}
+		case <-done:
+			return
+		}
+	}
+}
+
 // ---- terminal WebSocket (per session, raw bytes) ----
 
 func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
@@ -1047,14 +1099,11 @@ func (s *Server) handlePtyWS(w http.ResponseWriter, r *http.Request) {
 	ch := sess.addClient()
 	defer sess.removeClient(ch)
 
-	// single writer goroutine: PTY output -> browser
-	go func() {
-		for data := range ch {
-			if conn.WriteMessage(websocket.BinaryMessage, data) != nil {
-				return
-			}
-		}
-	}()
+	// single writer goroutine: PTY output -> browser (plus keepalive pings)
+	done := make(chan struct{})
+	defer close(done)
+	watchPong(conn)
+	go pumpWrites(conn, ch, websocket.BinaryMessage, done)
 
 	// reader loop: browser -> PTY. Keystrokes arrive as binary; text frames are
 	// control messages (resize).
@@ -1185,14 +1234,11 @@ func (s *Server) handleControlWS(w http.ResponseWriter, r *http.Request) {
 	client := s.hub.add()
 	defer s.hub.remove(client)
 
-	// single writer goroutine for this connection
-	go func() {
-		for b := range client.send {
-			if conn.WriteMessage(websocket.TextMessage, b) != nil {
-				return
-			}
-		}
-	}()
+	// single writer goroutine for this connection (plus keepalive pings)
+	done := make(chan struct{})
+	defer close(done)
+	watchPong(conn)
+	go pumpWrites(conn, client.send, websocket.TextMessage, done)
 
 	// initial snapshot
 	client.send <- mustJSON(map[string]any{"type": "sessions", "sessions": s.mgr.List()})

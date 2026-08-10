@@ -321,6 +321,16 @@ body.resizing { cursor: col-resize; user-select: none; }
 #prompts-btn.on { color: var(--text); background: var(--panel-2); }
 .term-pane { position: absolute; inset: 0; padding: 6px; display: none; }
 .term-pane.active { display: block; }
+/* Socket down (typically after a suspend): keystrokes go nowhere until the
+   reconnect lands, so say so rather than letting the pane look merely idle. */
+.term-pane.link-down::after {
+  content: "reconnecting…";
+  position: absolute; top: 10px; right: 18px; z-index: 5;
+  padding: 2px 8px; border-radius: 10px;
+  background: #4a2f14; color: #e3b341; border: 1px solid #e3b341;
+  font: 11px ui-monospace, Menlo, monospace;
+}
+.term-pane.link-down .xterm { opacity: .55; transition: opacity .2s; }
 /* xterm draws its rows full-width, painting over the scrollbar column so it
    can't be dragged/clicked (xtermjs/xterm.js#1751; worse in Chromium/Brave).
    FitAddon already reserves the 9px scrollbar in its column math, so inset the

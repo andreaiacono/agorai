@@ -387,6 +387,14 @@ function mountTerminal(id) {
     term.loadAddon(search);
   }
 
+  // The PTY socket is the only path keystrokes take, so it has to survive a
+  // laptop suspend. `ws` is reassigned by every reconnect — read it off `rec`
+  // (never capture it in a closure) so nothing keeps typing into a dead socket.
+  const rec = { term, fit, ws: null, pane, search, closed: false };
+  const send = (data) => {
+    if (rec.ws && rec.ws.readyState === 1) rec.ws.send(data);
+  };
+
   // Intercept a few key combos before xterm sends them to the PTY:
   //  - Ctrl/Cmd+F      → our find bar (handled at window level), don't reach PTY
   //  - Ctrl/Cmd+C      → copy the selection (swapped: no longer sends ^C)
@@ -400,7 +408,7 @@ function mountTerminal(id) {
     if (search && (e.key === "f" || e.key === "F")) return false;
     if (e.key === "c" || e.key === "C") {
       if (e.shiftKey) {
-        if (ws.readyState === 1) ws.send(enc.encode("\x03")); // interrupt
+        send(enc.encode("\x03")); // interrupt
       } else {
         const sel = term.getSelection();
         if (sel) navigator.clipboard.writeText(sel).catch(() => {});
@@ -408,7 +416,7 @@ function mountTerminal(id) {
       return false; // we handled it; xterm must not also send anything
     }
     if ((e.key === "z" || e.key === "Z") && !e.altKey) {
-      if (ws.readyState === 1) ws.send(enc.encode("\x1f")); // chat:undo (Ctrl+_)
+      send(enc.encode("\x1f")); // chat:undo (Ctrl+_)
       return false;
     }
     return true;
@@ -439,10 +447,33 @@ function mountTerminal(id) {
     e.stopPropagation();
   }, { passive: false, capture: true });
 
-  const ws = new WebSocket(`ws://${location.host}/ws/pty/${id}`);
-  ws.binaryType = "arraybuffer";
-  ws.onmessage = (e) => term.write(new Uint8Array(e.data));
-  ws.onopen = () => sendResize(ws, term);
+  // Reconnect with backoff: a dropped socket used to be permanent, and because
+  // sends are guarded on readyState the pane stayed silent instead of showing an
+  // error — typing into it did nothing at all. The server replays its scrollback
+  // ring to every client that attaches, so a reconnect repaints on its own.
+  let retry = 0;
+  const connect = () => {
+    if (rec.closed) return;
+    const ws = new WebSocket(`ws://${location.host}/ws/pty/${id}`);
+    rec.ws = ws;
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (e) => term.write(new Uint8Array(e.data));
+    ws.onopen = () => {
+      retry = 0;
+      pane.classList.remove("link-down");
+      // The attach replays the whole ring — clear first, or it lands underneath
+      // the copy we already have and the scrollback shows everything twice.
+      term.reset();
+      sendResize(ws, term);
+    };
+    ws.onclose = () => {
+      if (rec.closed || rec.ws !== ws) return; // superseded or torn down
+      pane.classList.add("link-down");
+      retry++;
+      setTimeout(connect, Math.min(250 * 2 ** (retry - 1), 5000));
+    };
+  };
+  connect();
 
   // keystrokes -> binary frame (text frames are reserved for resize).
   // Strip focus in/out reports (CSI I / CSI O): clicking a button/another row
@@ -450,10 +481,10 @@ function mountTerminal(id) {
   // claude as an interrupt ("Interrupted"). They're cosmetic, so drop them.
   term.onData((d) => {
     d = d.replace(/\x1b\[[IO]/g, "");
-    if (d && ws.readyState === 1) ws.send(enc.encode(d));
+    if (d) send(enc.encode(d));
   });
 
-  state.terms.set(id, { term, fit, ws, pane, search });
+  state.terms.set(id, rec);
 }
 
 /* ---------- find in terminal ---------- */
@@ -846,6 +877,7 @@ function disposeStaleTerminals() {
   const live = new Set(state.sessions.map((s) => s.id));
   for (const [id, t] of state.terms) {
     if (live.has(id)) continue;
+    t.closed = true; // before close(), so onclose doesn't schedule a reconnect
     try { t.ws.close(); } catch {}
     try { t.term.dispose(); } catch {}
     t.pane.remove();
