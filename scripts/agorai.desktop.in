@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AgorAI
+GenericName=Claude Code Dashboard
+Exec=@LAUNCH@ %u
+Icon=@ICON@
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=AgorAI
+Actions=Restart;
+
+[Desktop Action Restart]
+Name=Restart AgorAI
+Exec=@LAUNCH@ --restart

@@ -138,6 +138,27 @@ flows (a root may be a repo itself or a tree scanned up to 3 levels deep):
 go run . -roots ~/dev,~/work,~/src
 ```
 
+## Desktop launcher (optional)
+
+To get AgorAI in the app grid as its own window, with a "Restart AgorAI" entry
+and the GNOME extension wired up:
+
+```
+scripts/install.sh
+```
+
+It builds the binary, runs `agorai install` for the hooks, renders the `.desktop`
+entries into `~/.local/share/applications`, and symlinks the GNOME extension out
+of this checkout. Everything is derived from the script's own location, so the
+checkout can live anywhere and can be moved or re-cloned — re-run `install.sh`
+afterwards and the launcher, icon, and extension symlink all follow it. Safe to
+re-run at any time.
+
+`scripts/agorai-launch.sh` is what the desktop entry calls: it rebuilds and starts
+the server if the port is free, then opens the dashboard as an app window
+(`AGORAI_APP=0` for a normal browser tab, `AGORAI_BROWSER` / `AGORAI_WINDOW` to
+override the browser and initial size). `--restart` stops a running server first.
+
 ## Wire up the hooks (required for "needs input" + live recaps)
 
 agorai learns that a session is waiting (and updates recaps) via Claude Code
